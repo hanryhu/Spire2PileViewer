@@ -47,7 +47,13 @@ public static class HandViewer
         HideOwnHand = false;
         if (_hideButton != null && GodotObject.IsInstanceValid(_hideButton)) _hideButton.QueueFree();
         _hideButton = null;
+        if (_textPanel != null && GodotObject.IsInstanceValid(_textPanel)) _textPanel.QueueFree();
+        _textPanel = null;
+        _lastText = "";
     }
+
+    /// <summary>Show this teammate's hand (auto-test helper; same as clicking their eye when nothing is shown).</summary>
+    internal static void View(ulong netId) => ViewedNetId = netId;
 
     /// <summary>Per-frame update while in combat (called by PileViewer).</summary>
     internal static void Update(NCombatRoom room, Func<ulong, Player?> findPlayer)
@@ -57,8 +63,10 @@ public static class HandViewer
             if (ViewedNetId != null || HideOwnHand || _hideButton != null) Reset();
             return;
         }
-        if (ViewedNetId is ulong id && findPlayer(id) == null) ViewedNetId = null; // teammate left / not in this combat
+        Player? viewed = ViewedNetId is ulong id ? findPlayer(id) : null;
+        if (ViewedNetId != null && viewed == null) ViewedNetId = null; // teammate left / not in this combat
         UpdateHideButton(room);
+        UpdateTextPanel(room, viewed);
     }
 
     private static void UpdateHideButton(NCombatRoom room)
@@ -116,6 +124,61 @@ public static class HandViewer
         ModLog.Info("HandViewer: created hide-hand button");
         return button;
     }
+
+    // ---- hv3: text protocol (temporary until hv4 renders real cards) ----
+
+    private static PanelContainer? _textPanel;
+
+    private static Label? _textLabel;
+
+    private static string _lastText = "";
+
+    /// <summary>"The Silent — Hand (7): Strike [1] · Neutralize [0] · ..." with live energy costs.</summary>
+    internal static string DescribeHand(Player player)
+    {
+        if (player.PlayerCombatState == null) return "not in combat";
+        var cards = PileType.Hand.GetPile(player).Cards;
+        string list = string.Join(" · ", cards.Select(c =>
+            $"{c.Title} [{(c.EnergyCost.CostsX ? "X" : c.EnergyCost.GetWithModifiers(CostModifiers.All).ToString())}]"));
+        return $"{player.Character.Title.GetFormattedText()} — Hand ({cards.Count}): {(cards.Count == 0 ? "(empty)" : list)}";
+    }
+
+    private static void UpdateTextPanel(NCombatRoom room, Player? viewed)
+    {
+        bool show = viewed != null && NCapstoneContainer.Instance?.InUse != true;
+        if (!show)
+        {
+            if (_textPanel != null && GodotObject.IsInstanceValid(_textPanel)) _textPanel.Visible = false;
+            _lastText = "";
+            return;
+        }
+        if (_textPanel == null || !GodotObject.IsInstanceValid(_textPanel))
+        {
+            _textPanel = new PanelContainer { Name = "Spire2PileViewer_HandText", ZIndex = 100, MouseFilter = Control.MouseFilterEnum.Ignore };
+            var style = new StyleBoxFlat { BgColor = new Color(0.05f, 0.05f, 0.08f, 0.85f), BorderColor = new Color(0.8f, 0.6f, 0.2f, 0.8f) };
+            style.SetBorderWidthAll(1);
+            style.SetCornerRadiusAll(6);
+            style.SetContentMarginAll(8);
+            _textPanel.AddThemeStyleboxOverride("panel", style);
+            _textLabel = new Label { MouseFilter = Control.MouseFilterEnum.Ignore };
+            _textLabel.AddThemeFontSizeOverride("font_size", 16);
+            _textPanel.AddChild(_textLabel);
+            room.AddChild(_textPanel);
+        }
+        _textPanel.Visible = true;
+        string text = DescribeHand(viewed!);
+        if (text != _lastText)
+        {
+            _lastText = text;
+            _textLabel!.Text = text;
+            ModLog.Info("HandViewer: hand text: " + text);
+        }
+        // Centered above where your own hand sits.
+        Vector2 viewport = room.GetViewportRect().Size;
+        _textPanel.GlobalPosition = new Vector2((viewport.X - _textPanel.Size.X) / 2f, viewport.Y * 0.62f);
+    }
+
+    internal static string CurrentText => _lastText;
 
     internal static Button? HideButton => _hideButton != null && GodotObject.IsInstanceValid(_hideButton) ? _hideButton : null;
 

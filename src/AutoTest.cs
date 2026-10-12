@@ -430,7 +430,44 @@ public static class AutoTest
         }
 
         await ExerciseHandViewerUi();
+        SettingsMenu.Close();
+        await ExerciseLiveHand(mutator, observer);
         Log("done");
+    }
+
+    /// <summary>
+    /// hv3: the observer (host) views the mutator's (client 1000's) hand; the mutator draws, adds and removes hand
+    /// cards through networked console actions; the observer logs its hand readout every second.
+    /// </summary>
+    private static async Task ExerciseLiveHand(bool mutator, bool observer)
+    {
+        const ulong mutatorId = 1000;
+        if (observer) HandViewer.View(mutatorId);
+        Task watch = observer ? WatchHand(9) : Task.CompletedTask;
+        if (mutator)
+        {
+            await Wait(1.0);
+            RunState runState = RunManager.Instance.DebugOnlyGetState()!;
+            Player me = LocalContext.GetMe(runState)!;
+            string cardId = PileType.Hand.GetPile(me).Cards.First().Id.Entry;
+            foreach (string cmd in new[] { "draw 2", $"card {cardId}", $"remove_card {cardId}" })
+            {
+                RunManager.Instance.ActionQueueSynchronizer.RequestEnqueue(new ConsoleCmdGameAction(me, cmd, inCombat: true));
+                Log($"hv3: mutator enqueued '{cmd}'");
+                await Wait(2.0);
+            }
+            Log("hv3: mutator's own hand: " + HandViewer.DescribeHand(me));
+        }
+        await watch;
+    }
+
+    private static async Task WatchHand(int seconds)
+    {
+        for (int i = 0; i < seconds; i++)
+        {
+            Log($"hv3: watch t+{i}s: {HandViewer.CurrentText}");
+            await Wait(1.0);
+        }
     }
 
     /// <summary>hv2: the strip's Hand (eye) slot, one-teammate-at-a-time toggling, the Hide hand button, the F1 tab.</summary>
