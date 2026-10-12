@@ -22,12 +22,14 @@ Show/hide, size, background opacity, a strip over your own character, text-list 
 
 ## Install
 
-Copy `Spire2PileViewer.dll` and `Spire2PileViewer.json` into `<Slay the Spire 2>/mods/Spire2PileViewer/`.
+Subscribe on the [Steam Workshop](https://steamcommunity.com/sharedfiles/filedetails/?id=3818266065), or copy `Spire2PileViewer.dll` and `Spire2PileViewer.json` into `<Slay the Spire 2>/mods/Spire2PileViewer/`.
 
 ## Build
 
 Needs the .NET 9 SDK and the game installed (set `Sts2Dir` in `src/Spire2PileViewer.csproj` if it isn't in
 the default Steam folder): `dotnet build src/Spire2PileViewer.csproj`, then `scripts/install-local.ps1`.
+Publish: `scripts/prepare-workshop.ps1`, then MegaCrit's
+[ModUploader](https://github.com/megacrit/sts2-mod-uploader) `upload -w workshop` (Steam running).
 Development notes: [PILE_VIEWER.md](PILE_VIEWER.md).
 
 ## Credits

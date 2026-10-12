@@ -18,6 +18,14 @@ Living notes so work can resume after an interruption. Newest status first.
 Each milestone is one or more commits ending in an annotated tag `mN`, so testing can roll back with
 `git checkout mN` and rebuild.
 
+## Steam Workshop
+
+- Item **3818266065** (friends-only at first upload, 2026-10-11), workspace `workshop/` (`workshop.json`,
+  `image.png`, `previews/`, `mod_id.txt` committed; `content/` built by `scripts/prepare-workshop.ps1`).
+- Update: bump `version` in `src/Spire2PileViewer.json`, set `changeNote`, run prepare-workshop, then
+  `%LOCALAPPDATA%\sts2-mod-uploader\ModUploader.exe upload -w <repo>\workshop` from that folder (Steam running).
+- Workshop and the local `<game>\mods\Spire2PileViewer` install share the mod id — keep only one.
+
 ## Dev loop
 
 1. `dotnet build src/Spire2PileViewer.csproj` (uses `%LOCALAPPDATA%\dotnet9`, `DOTNET_ROOT` set).
