@@ -2,12 +2,18 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Godot;
+using HarmonyLib;
 using MegaCrit.Sts2.Core.Combat;
 using MegaCrit.Sts2.Core.Entities.Cards;
 using MegaCrit.Sts2.Core.Entities.Players;
+using MegaCrit.Sts2.Core.Helpers;
+using MegaCrit.Sts2.Core.Localization;
 using MegaCrit.Sts2.Core.Models;
 using MegaCrit.Sts2.Core.Nodes.Combat;
 using MegaCrit.Sts2.Core.Nodes.Rooms;
+using MegaCrit.Sts2.Core.Nodes.Screens;
+using MegaCrit.Sts2.Core.Nodes.Screens.Capstones;
+using MegaCrit.Sts2.Core.Nodes.Vfx;
 using MegaCrit.Sts2.Core.Runs;
 
 namespace Spire2PileViewer;
@@ -28,7 +34,8 @@ public static class PileViewer
     private static readonly Vector2 AnchorOffset = new(0f, -350f);
 
     // Launch with -pileviewerself to also show a strip for the local player (handy for solo testing).
-    private static readonly bool IncludeSelf = AutoTest.Enabled || OS.GetCmdlineArgs().Contains("-pileviewerself");
+    // The solo auto-test also implies it, since a solo run has no teammates.
+    private static readonly bool IncludeSelf = OS.GetCmdlineArgs().Contains("-pileviewerself");
 
     private sealed class Widget
     {
@@ -105,7 +112,8 @@ public static class PileViewer
         }
 
         ulong localNetId = RunManager.Instance?.NetService?.NetId ?? 0;
-        var players = state.Players.Where(p => p != null && (IncludeSelf || p.NetId != localNetId)).ToList();
+        bool includeSelf = IncludeSelf || (AutoTest.Enabled && state.Players.Count == 1);
+        var players = state.Players.Where(p => p != null && (includeSelf || p.NetId != localNetId)).ToList();
 
         foreach (var stale in _widgets.Keys.Where(id => players.All(p => p.NetId != id)).ToList())
         {
@@ -127,7 +135,9 @@ public static class PileViewer
     private static void UpdateWidget(NCombatRoom room, Widget widget)
     {
         NCreature? creatureNode = room.GetCreatureNode(widget.Player.Creature);
-        if (creatureNode == null || widget.Player.PlayerCombatState == null)
+        // Hide under full-screen overlays (pile screens, deck view, map, ...) — the strip would draw on top of them.
+        bool overlayOpen = NCapstoneContainer.Instance?.InUse == true;
+        if (creatureNode == null || widget.Player.PlayerCombatState == null || overlayOpen)
         {
             widget.Root.Visible = false;
             widget.ClosePopup();
@@ -225,6 +235,10 @@ public static class PileViewer
             };
             button.AddChild(icon);
             icon.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);
+            // Hover bump like the native pile buttons (1.25x, eased back on exit).
+            icon.PivotOffset = new Vector2(SlotSize, SlotSize) / 2f;
+            button.MouseEntered += () => TweenScale(icon, 1.25f, 0.05);
+            button.MouseExited += () => TweenScale(icon, 1f, 0.3);
         }
         else
         {
@@ -283,11 +297,90 @@ public static class PileViewer
         OnSlotPressed(widget, pileType);
     }
 
+    /// <summary>What the last press opened, for the auto-test log.</summary>
+    internal static string DescribeOpenView()
+    {
+        if (NCapstoneContainer.Instance?.CurrentCapstoneScreen is NCardPileScreen screen)
+        {
+            Player? owner = _widgets.Values.Select(w => w.Player)
+                .FirstOrDefault(p => p.PlayerCombatState != null && SlotPiles.Any(t => t.GetPile(p) == screen.Pile));
+            return $"native screen: {screen.Pile.Type} pile of player {owner?.NetId.ToString() ?? "?"} ({screen.Pile.Cards.Count} cards)";
+        }
+        Widget? withPopup = _widgets.Values.FirstOrDefault(w => w.Popup != null && GodotObject.IsInstanceValid(w.Popup));
+        if (withPopup != null) return $"text popup: {withPopup.PopupLabel?.Text.Replace('\n', '|')}";
+        return "nothing open";
+    }
+
+    /// <summary>
+    /// Opens the game's own card-pile screen on the teammate's pile, mirroring NCombatCardPile.OnRelease:
+    /// cancel targeting, toggle closed if that pile is already open, thought bubble if the pile is empty.
+    /// Falls back to the milestone-2 text popup if the native screen can't be opened.
+    /// </summary>
     private static void OnSlotPressed(Widget widget, PileType pileType)
     {
-        string text = DescribePile(widget.Player, pileType);
-        ModLog.Info($"PileViewer: clicked {pileType} for player {widget.Player.NetId}: " + text.Replace('\n', '|'));
+        Player player = widget.Player;
+        string text = DescribePile(player, pileType);
+        ModLog.Info($"PileViewer: clicked {pileType} for player {player.NetId}: " + text.Replace('\n', '|'));
+        if (player.PlayerCombatState == null || !CombatManager.Instance.IsInProgress) return;
 
+        try
+        {
+            widget.ClosePopup();
+            CardPile pile = pileType.GetPile(player);
+            if (NTargetManager.Instance.IsInSelection) NTargetManager.Instance.CancelTargeting();
+
+            NCapstoneContainer? capstone = NCapstoneContainer.Instance;
+            if (pile.IsEmpty)
+            {
+                if (capstone?.InUse == true) capstone.Close();
+                ShowEmptyBubble(player, pileType);
+                return;
+            }
+            if (capstone?.CurrentCapstoneScreen is NCardPileScreen open && open.Pile == pile)
+            {
+                capstone.Close();
+                return;
+            }
+
+            NCardPileScreen screen = NCardPileScreen.ShowScreen(pile, Array.Empty<string>());
+            LabelScreen(screen, player);
+        }
+        catch (Exception ex)
+        {
+            ModLog.Error("PileViewer: native pile screen failed, using text popup", ex);
+            ToggleTextPopup(widget, pileType, text);
+        }
+    }
+
+    /// <summary>Prefixes the native screen's bottom caption with whose pile this is.</summary>
+    private static void LabelScreen(NCardPileScreen screen, Player player)
+    {
+        try
+        {
+            if (Traverse.Create(screen).Field("_bottomLabel").GetValue() is RichTextLabel label)
+            {
+                string owner = player.Character.Title.GetFormattedText();
+                label.Text = $"[center][gold]{owner}[/gold][/center]\n" + label.Text;
+            }
+        }
+        catch (Exception ex)
+        {
+            ModLog.Error("PileViewer.LabelScreen", ex);
+        }
+    }
+
+    private static void ShowEmptyBubble(Player player, PileType pileType)
+    {
+        string key = pileType == PileType.Draw ? "OPEN_EMPTY_DRAW" : "OPEN_EMPTY_DISCARD";
+        string message = pileType == PileType.Exhaust && !LocString.Exists("combat_messages", "OPEN_EMPTY_EXHAUST")
+            ? "No exhausted cards."
+            : new LocString("combat_messages", pileType == PileType.Exhaust ? "OPEN_EMPTY_EXHAUST" : key).GetFormattedText();
+        var bubble = NThoughtBubbleVfx.Create(message, player.Creature, 2.0);
+        NCombatRoom.Instance?.CombatVfxContainer.AddChildSafely(bubble);
+    }
+
+    private static void ToggleTextPopup(Widget widget, PileType pileType, string text)
+    {
         bool sameOpen = widget.Popup != null && GodotObject.IsInstanceValid(widget.Popup) && widget.PopupPile == pileType;
         widget.ClosePopup();
         if (sameOpen) return;
@@ -312,6 +405,13 @@ public static class PileViewer
         widget.Popup = popup;
         widget.PopupLabel = label;
         widget.PopupPile = pileType;
+    }
+
+    private static void TweenScale(Control control, float scale, double seconds)
+    {
+        if (!GodotObject.IsInstanceValid(control)) return;
+        control.CreateTween().TweenProperty(control, "scale", new Vector2(scale, scale), seconds)
+            .SetEase(Tween.EaseType.Out).SetTrans(Tween.TransitionType.Expo);
     }
 
     private const string BadgeTexturePath = "res://images/packed/combat_ui/pile_button_count.png";
