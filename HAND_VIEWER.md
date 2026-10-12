@@ -11,7 +11,7 @@ Tags are `hvN` (Pile Viewer uses `mN`). Each milestone ends in an annotated tag 
 | # | Scope | State | Tag |
 |---|---|---|---|
 | 1 | Dev environment for autonomous testing & review: `scripts/test-settings.ps1` (windowed test settings, applied by every launch script), `-autotestsuite hands` + native-hand probe, this tracker | done | `hv1` |
-| 2 | UI: 4th "Hand" slot (eye icon) in each strip → toggles that teammate's hand view (one teammate at a time); "Hide hand" button under End Turn; F1 menu gets a Hand Viewer tab. Settings: enable Hand Viewer, enable hide-own-hand, hand opacity/shadow, hand Y-occlusion (0–100 %, default 30 %) | — | `hv2` |
+| 2 | UI: 4th "Hand" slot (eye icon, hand count) in each strip, order draw/hand/exhaust/discard → toggles that teammate's hand view (one at a time, slot highlighted); "Hide hand" button under End Turn; F1 menu tabs (Pile Viewer / Hand Viewer) with: enable Hand Viewer, enable Hide hand button, teammate hand shadow, "% of card visible" (default 30 %). Verified 3 players | done | `hv2` |
 | 3 | Live data: text protocol listing the viewed teammate's hand, updating in real time (verified over the network) | — | `hv3` |
 | 4 | Hand display: teammate's cards rendered natively behind your hand in the native fan layout; Hand Card Count numbers shift up to clear them | — | `hv4` |
 | 5 | Closeups: hovering a teammate card enlarges it like the native hand | — | `hv5` |
@@ -56,7 +56,6 @@ Tags are `hvN` (Pile Viewer uses `mN`). Each milestone ends in an annotated tag 
 
 - Hand slot order in the strip: draw | **hand** | exhaust | discard (as specified).
 - Only one teammate's hand is shown at a time; opening another closes the first.
-- **Open — Y-occlusion meaning:** spec says "mostly occluded" but default 30 %. Working interpretation for hv2:
-  occlusion = share of the teammate card's height hidden behind your own hand (0 % = sits fully above your hand,
-  100 % = directly behind it). Confirm before hv4 tuning.
+- Y-occlusion = **"% of card visible"** (user, 2026-10-12): how much of each teammate card peeks out above your hand;
+  default 30 % (mostly occluded). The slider is labelled exactly that.
 - **Open — hotkeys (hv9):** decide after hv8 with and without.

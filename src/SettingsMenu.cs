@@ -40,6 +40,12 @@ public static class SettingsMenu
     internal static CheckButton? TextListToggle;
     internal static Button? ResetPositionButton;
     internal static Button? ResetAllButton;
+    internal static TabContainer? Tabs;
+    internal static CheckButton? HandViewerToggle;
+    internal static CheckButton? HideHandButtonToggle;
+    internal static HSlider? HandShadowSlider;
+    internal static HSlider? HandVisibleSlider;
+    private static int _selectedTab;
     internal static OptionButton? TeammatePicker;
     internal static Button? GetHotkeyButton(int slot) => _hotkeyButtons[slot];
     internal static string HotkeyStatus => _hotkeyStatus?.Text ?? "";
@@ -198,6 +204,21 @@ public static class SettingsMenu
         close.Pressed += Close;
         header.AddChild(close);
 
+        // Tabs: one per feature.
+        Tabs = new TabContainer();
+        Tabs.AddThemeFontSizeOverride("font_size", 14);
+        box.AddChild(Tabs);
+        var pileTab = new VBoxContainer { Name = "Pile Viewer" };
+        pileTab.AddThemeConstantOverride("separation", 8);
+        Tabs.AddChild(pileTab);
+        var handTab = new VBoxContainer { Name = "Hand Viewer" };
+        handTab.AddThemeConstantOverride("separation", 8);
+        Tabs.AddChild(handTab);
+        Tabs.CurrentTab = _selectedTab;
+        Tabs.TabChanged += tab => _selectedTab = (int)tab;
+        VBoxContainer outer = box;
+        box = pileTab;
+
         EnabledToggle = AddToggle(box, "Show teammates' piles", Settings.Enabled, v => Settings.Enabled = v);
         ScaleSlider = AddSlider(box, "Strip size", Settings.MinScale * 100f, Settings.MaxScale * 100f, Settings.Scale * 100f,
             v => Settings.Scale = (float)v / 100f);
@@ -210,6 +231,10 @@ public static class SettingsMenu
         AddHotkeysSection(box);
 
         ResetPositionButton = AddButton(box, "Reset strip positions", Settings.ResetPositions);
+
+        AddHandViewerTab(handTab);
+
+        box = outer;
         ResetAllButton = AddButton(box, "Reset all settings", () =>
         {
             Settings.ResetAll();
@@ -218,7 +243,7 @@ public static class SettingsMenu
 
         var hint = new Label
         {
-            Text = "Click a slot to view that pile. Shift+drag a strip to move it. F1 closes this menu.",
+            Text = "Click a slot to view that pile, or the eye to see that teammate's hand. Shift+drag a strip to move it. F1 closes this menu.",
             AutowrapMode = TextServer.AutowrapMode.WordSmart,
             CustomMinimumSize = new Vector2(PanelWidth - 28f, 0f),
         };
@@ -344,6 +369,28 @@ public static class SettingsMenu
             _hotkeyStatus.Text = "Saved. Hotkeys open the selected teammate's piles during combat.";
             _hotkeyStatus.AddThemeColorOverride("font_color", new Color(0.6f, 0.6f, 0.6f));
         }
+    }
+
+    private static void AddHandViewerTab(VBoxContainer tab)
+    {
+        HandViewerToggle = AddToggle(tab, "Enable Hand Viewer (eye slot in each strip)", Settings.HandViewerEnabled,
+            v => Settings.HandViewerEnabled = v);
+        HideHandButtonToggle = AddToggle(tab, "Show the \"Hide hand\" button under End Turn", Settings.HideHandButtonEnabled,
+            v => Settings.HideHandButtonEnabled = v);
+        HandShadowSlider = AddSlider(tab, "Teammate hand shadow", 0f, 100f, Settings.HandShadow * 100f,
+            v => Settings.HandShadow = (float)v / 100f);
+        HandVisibleSlider = AddSlider(tab, "% of card visible", 0f, 100f, Settings.HandVisible * 100f,
+            v => Settings.HandVisible = (float)v / 100f);
+        var note = new Label
+        {
+            Text = "Click the eye in a teammate's strip to show their hand behind yours (one teammate at a time). " +
+                "\"% of card visible\" is how much of each of their cards peeks out above your hand.",
+            AutowrapMode = TextServer.AutowrapMode.WordSmart,
+            CustomMinimumSize = new Vector2(PanelWidth - 28f, 0f),
+        };
+        note.AddThemeFontSizeOverride("font_size", 12);
+        note.AddThemeColorOverride("font_color", new Color(0.6f, 0.6f, 0.6f));
+        tab.AddChild(note);
     }
 
     private static CheckButton AddToggle(VBoxContainer box, string text, bool value, Action<bool> apply)

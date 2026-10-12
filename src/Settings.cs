@@ -25,6 +25,10 @@ public static class Settings
         public bool textList { get; set; }
         public Dictionary<string, float[]>? stripOffsets { get; set; }
         public Dictionary<string, string>? hotkeys { get; set; }
+        public bool handViewer { get; set; } = true;
+        public bool hideHandButton { get; set; } = true;
+        public float handShadow { get; set; } = 0.5f;
+        public float handVisible { get; set; } = 0.3f;
     }
 
     /// <summary>Show the strips at all.</summary>
@@ -41,6 +45,20 @@ public static class Settings
 
     /// <summary>Clicking a slot shows a text list above the strip instead of the game's card screen.</summary>
     public static bool TextList;
+
+    // ---- Hand Viewer (F1 → Hand Viewer tab) ----
+
+    /// <summary>Hand Viewer on: strips get a Hand slot that shows that teammate's hand behind yours.</summary>
+    public static bool HandViewerEnabled = true;
+
+    /// <summary>Show the "Hide hand" button under End Turn.</summary>
+    public static bool HideHandButtonEnabled = true;
+
+    /// <summary>How dark the teammate's hand is drawn (0 = no shadow, 1 = darkest).</summary>
+    public static float HandShadow = 0.5f;
+
+    /// <summary>% of each teammate card visible above your own hand (0..1).</summary>
+    public static float HandVisible = 0.3f;
 
     /// <summary>
     /// Per-strip drag offsets relative to the default spot above the character, keyed by the player's NetId
@@ -95,6 +113,10 @@ public static class Settings
                 if (ulong.TryParse(key, out ulong netId) && xy is { Length: 2 }) _offsets[netId] = new Vector2(xy[0], xy[1]);
             }
             Hotkeys.Deserialize(dto.hotkeys);
+            HandViewerEnabled = dto.handViewer;
+            HideHandButtonEnabled = dto.hideHandButton;
+            HandShadow = Math.Clamp(dto.handShadow, 0f, 1f);
+            HandVisible = Math.Clamp(dto.handVisible, 0f, 1f);
             ModLog.Info($"Settings loaded: enabled={Enabled} scale={Scale} opacity={Opacity} showSelf={ShowSelf} textList={TextList} offsets={DescribeOffsets()}");
         }
         catch (Exception ex)
@@ -116,6 +138,10 @@ public static class Settings
                 textList = TextList,
                 stripOffsets = _offsets.ToDictionary(kv => kv.Key.ToString(), kv => new[] { kv.Value.X, kv.Value.Y }),
                 hotkeys = Hotkeys.Serialize(),
+                handViewer = HandViewerEnabled,
+                hideHandButton = HideHandButtonEnabled,
+                handShadow = HandShadow,
+                handVisible = HandVisible,
             };
             File.WriteAllText(FilePath, JsonSerializer.Serialize(dto, new JsonSerializerOptions { WriteIndented = true }));
         }
@@ -141,6 +167,10 @@ public static class Settings
         TextList = false;
         _offsets.Clear();
         Hotkeys.Deserialize(null);
+        HandViewerEnabled = true;
+        HideHandButtonEnabled = true;
+        HandShadow = 0.5f;
+        HandVisible = 0.3f;
         Save();
         ModLog.Info("Settings: all reset to defaults");
     }

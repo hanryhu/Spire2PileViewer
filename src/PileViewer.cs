@@ -26,7 +26,13 @@ namespace Spire2PileViewer;
 /// </summary>
 public static class PileViewer
 {
+    /// <summary>The three piles that open a pile view (also the hotkey targets).</summary>
     internal static readonly PileType[] SlotPiles = { PileType.Draw, PileType.Exhaust, PileType.Discard };
+
+    /// <summary>Strip slots left to right. Hand toggles the Hand Viewer instead of opening a pile.</summary>
+    internal static readonly PileType[] StripSlots = { PileType.Draw, PileType.Hand, PileType.Exhaust, PileType.Discard };
+
+    private const string PeekTexturePath = "res://images/atlases/ui_atlas.sprites/peek_button.tres";
 
     private const float SlotSize = 56f;
 
@@ -47,9 +53,10 @@ public static class PileViewer
         public required Player Player;
         public required PanelContainer Root;
         public required StyleBoxFlat Style;
-        public readonly Label[] Counts = new Label[SlotPiles.Length];
-        public readonly Control?[] Icons = new Control?[SlotPiles.Length];
-        public readonly Control?[] Badges = new Control?[SlotPiles.Length];
+        public readonly Label[] Counts = new Label[StripSlots.Length];
+        public readonly Control?[] Icons = new Control?[StripSlots.Length];
+        public readonly Control?[] Badges = new Control?[StripSlots.Length];
+        public readonly Button?[] Buttons = new Button?[StripSlots.Length];
 
         // Text popup listing one pile's cards (milestone 2); null when closed.
         public PanelContainer? Popup;
@@ -95,6 +102,7 @@ public static class PileViewer
     {
         foreach (var widget in _widgets.Values) widget.Free();
         _widgets.Clear();
+        HandViewer.Reset();
     }
 
     private static void OnFrame()
@@ -131,6 +139,8 @@ public static class PileViewer
             _widgets.Remove(stale);
         }
 
+        HandViewer.Update(room, id => state.Players.FirstOrDefault(p => p != null && p.NetId == id && p.NetId != localNetId));
+
         foreach (var player in players)
         {
             if (!_widgets.TryGetValue(player.NetId, out var widget) || !GodotObject.IsInstanceValid(widget.Root))
@@ -155,9 +165,16 @@ public static class PileViewer
         }
         widget.Root.Visible = true;
 
-        for (int i = 0; i < SlotPiles.Length; i++)
+        for (int i = 0; i < StripSlots.Length; i++)
         {
-            string text = SlotPiles[i].GetPile(widget.Player).Cards.Count.ToString();
+            if (StripSlots[i] == PileType.Hand && widget.Buttons[i] is Button handButton)
+            {
+                handButton.Visible = Settings.HandViewerEnabled;
+                // Highlight the Hand slot of the teammate whose hand is being shown.
+                bool viewing = HandViewer.ViewedNetId == widget.Player.NetId;
+                if (widget.Icons[i] is Control eye) eye.Modulate = viewing ? new Color(1.3f, 1.15f, 0.55f) : Colors.White;
+            }
+            string text = StripSlots[i].GetPile(widget.Player).Cards.Count.ToString();
             if (widget.Counts[i].Text == text) continue;
             // Native pile buttons bump the icon and count when a card arrives; do the same.
             bool grew = int.TryParse(widget.Counts[i].Text, out int old) && int.TryParse(text, out int now) && now > old;
@@ -231,9 +248,10 @@ public static class PileViewer
         root.AddChild(row);
 
         var widget = new Widget { Player = player, Root = root, Style = style };
-        for (int i = 0; i < SlotPiles.Length; i++)
+        for (int i = 0; i < StripSlots.Length; i++)
         {
-            row.AddChild(CreateSlot(room, widget, SlotPiles[i], out widget.Counts[i]));
+            widget.Buttons[i] = CreateSlot(room, widget, StripSlots[i], out widget.Counts[i]);
+            row.AddChild(widget.Buttons[i]);
         }
 
         room.AddChild(root);
@@ -249,7 +267,7 @@ public static class PileViewer
             FocusMode = Control.FocusModeEnum.None,
             CustomMinimumSize = new Vector2(SlotSize, SlotSize),
             MouseFilter = Control.MouseFilterEnum.Stop,
-            TooltipText = PileName(pileType) + "\n" + DragHint,
+            TooltipText = (pileType == PileType.Hand ? "Show this teammate's hand behind yours" : PileName(pileType)) + "\n" + DragHint,
         };
         button.GuiInput += ev => HandleDragInput(widget.Player.NetId, button, ev);
 
@@ -264,7 +282,7 @@ public static class PileViewer
                 MouseFilter = Control.MouseFilterEnum.Ignore,
             };
             button.AddChild(icon);
-            widget.Icons[Array.IndexOf(SlotPiles, pileType)] = icon;
+            widget.Icons[Array.IndexOf(StripSlots, pileType)] = icon;
             icon.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);
             // Hover bump like the native pile buttons (1.25x, eased back on exit).
             icon.PivotOffset = new Vector2(SlotSize, SlotSize) / 2f;
@@ -291,7 +309,7 @@ public static class PileViewer
         };
         button.AddChild(badge);
         badge.PivotOffset = badgeStyle.Size / 2f;
-        int slot = Array.IndexOf(SlotPiles, pileType);
+        int slot = Array.IndexOf(StripSlots, pileType);
         widget.Badges[slot] = badge;
 
         count = new Label
@@ -308,7 +326,8 @@ public static class PileViewer
         badge.AddChild(count);
         count.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);
 
-        button.Pressed += () => OnSlotPressed(widget, pileType);
+        if (pileType == PileType.Hand) button.Pressed += () => HandViewer.Toggle(widget.Player);
+        else button.Pressed += () => OnSlotPressed(widget, pileType);
         return button;
     }
 
@@ -377,16 +396,24 @@ public static class PileViewer
     }
 
     /// <summary>Presses a slot on the first strip, as if clicked (auto-test only).</summary>
-    internal static void SimulatePress(PileType pileType)
+    internal static void SimulatePress(PileType pileType) => SimulatePress(0, pileType);
+
+    /// <summary>Presses a slot on strip #index (in creation order) through the slot button's real Pressed signal.</summary>
+    internal static void SimulatePress(int index, PileType pileType)
     {
-        Widget? widget = _widgets.Values.FirstOrDefault();
-        if (widget == null)
+        Widget? widget = _widgets.Values.Skip(index).FirstOrDefault();
+        int slot = Array.IndexOf(StripSlots, pileType);
+        if (widget == null || slot < 0 || widget.Buttons[slot] is not Button button)
         {
-            ModLog.Info("PileViewer: SimulatePress with no strips");
+            ModLog.Info($"PileViewer: SimulatePress({index}, {pileType}) with no such strip/slot");
             return;
         }
-        OnSlotPressed(widget, pileType);
+        button.EmitSignal(BaseButton.SignalName.Pressed);
     }
+
+    /// <summary>Whether each strip's Hand slot is shown (auto-test only).</summary>
+    internal static string DescribeHandSlots() => string.Join(", ", _widgets.Values.Select(w =>
+        $"{w.Player.NetId}:{(w.Buttons[Array.IndexOf(StripSlots, PileType.Hand)]?.Visible == true ? "shown" : "hidden")}"));
 
     /// <summary>What the last press opened, for the auto-test log.</summary>
     internal static string DescribeOpenView()
@@ -607,7 +634,8 @@ public static class PileViewer
             new Vector2(fallbackSize, fallbackSize), Colors.White, Colors.White, Colors.Black, 4, 15);
         try
         {
-            NCombatCardPile? native = NativeButton(room, pileType);
+            // The Hand slot has no native pile button; it borrows the draw pile's badge.
+            NCombatCardPile? native = NativeButton(room, pileType == PileType.Hand ? PileType.Draw : pileType);
             Control? container = native?.GetNodeOrNull<Control>("CountContainer");
             TextureRect? background = container?.GetNodeOrNull<TextureRect>("Background");
             Label? label = container?.GetNodeOrNull<Label>("Count");
@@ -638,6 +666,8 @@ public static class PileViewer
 
     private static Texture2D? GetPileTexture(NCombatRoom room, PileType pileType)
     {
+        // The Hand slot uses the eye icon of the native "peek" button (shown when a card picker hides your hand).
+        if (pileType == PileType.Hand) return LoadTexture(PeekTexturePath);
         try
         {
             NCombatCardPile? native = NativeButton(room, pileType);
@@ -680,6 +710,7 @@ public static class PileViewer
     internal static string PileName(PileType pileType) => pileType switch
     {
         PileType.Draw => "Draw pile",
+        PileType.Hand => "Hand",
         PileType.Exhaust => "Exhaust pile",
         PileType.Discard => "Discard pile",
         _ => pileType.ToString(),

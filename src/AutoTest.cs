@@ -428,7 +428,58 @@ public static class AutoTest
             Log($"hands: P{number} {player.Character.Id.Entry} hand ({cards.Count}): " +
                 string.Join(", ", cards.Select(c => $"{c.Title}[{c.EnergyCost.GetWithModifiers(CostModifiers.All)}]")));
         }
+
+        await ExerciseHandViewerUi();
         Log("done");
+    }
+
+    /// <summary>hv2: the strip's Hand (eye) slot, one-teammate-at-a-time toggling, the Hide hand button, the F1 tab.</summary>
+    private static async Task ExerciseHandViewerUi()
+    {
+        Log("hv2: strips: " + PileViewer.DescribeState());
+        Log("hv2: hand slots: " + PileViewer.DescribeHandSlots());
+        Log("hv2: start: " + HandViewer.DescribeState());
+
+        PileViewer.SimulatePress(0, PileType.Hand);
+        await Wait(0.5);
+        Log("hv2: eye on strip 0 → " + HandViewer.DescribeState());
+        if (PileViewer.Teammates().Count >= 2)
+        {
+            PileViewer.SimulatePress(1, PileType.Hand);
+            await Wait(0.5);
+            Log("hv2: eye on strip 1 (should switch) → " + HandViewer.DescribeState());
+            PileViewer.SimulatePress(1, PileType.Hand);
+        }
+        else
+        {
+            PileViewer.SimulatePress(0, PileType.Hand);
+        }
+        await Wait(0.5);
+        Log("hv2: eye again (should close) → " + HandViewer.DescribeState());
+
+        HandViewer.HideButton?.EmitSignal(BaseButton.SignalName.Pressed);
+        await Wait(0.5);
+        Log("hv2: hide-hand pressed → " + HandViewer.DescribeState());
+        HandViewer.HideButton?.EmitSignal(BaseButton.SignalName.Pressed);
+        await Wait(0.5);
+        Log("hv2: hide-hand pressed again → " + HandViewer.DescribeState());
+
+        SettingsMenu.Open();
+        SettingsMenu.Tabs!.CurrentTab = 1;
+        await Wait(0.5);
+        SettingsMenu.HandVisibleSlider!.Value = 45;
+        SettingsMenu.HandShadowSlider!.Value = 70;
+        Log($"hv2: menu tab '{SettingsMenu.Tabs.GetTabTitle(SettingsMenu.Tabs.CurrentTab)}': visible={Settings.HandVisible} shadow={Settings.HandShadow}");
+        PileViewer.SimulatePress(0, PileType.Hand);
+        SettingsMenu.HandViewerToggle!.ButtonPressed = false;
+        await Wait(0.5);
+        Log($"hv2: Hand Viewer off → slots {PileViewer.DescribeHandSlots()}; {HandViewer.DescribeState()}");
+        SettingsMenu.HandViewerToggle.ButtonPressed = true;
+        await Wait(0.5);
+        Log($"hv2: Hand Viewer on → slots {PileViewer.DescribeHandSlots()}; {HandViewer.DescribeState()}");
+        PileViewer.SimulatePress(0, PileType.Hand); // leave a hand view on + menu open for the screenshot
+        await Wait(0.5);
+        Log("hv2: final → " + HandViewer.DescribeState());
     }
 
     private static async Task WatchCounts(int seconds)
