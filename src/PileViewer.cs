@@ -178,7 +178,8 @@ public static class PileViewer
         }
 
         Vector2 size = widget.Root.Size * Settings.Scale;
-        widget.Root.GlobalPosition = creatureNode.GlobalPosition + AnchorOffset + Settings.Offset - new Vector2(size.X / 2f, size.Y);
+        widget.Root.GlobalPosition = creatureNode.GlobalPosition + AnchorOffset + Settings.GetOffset(widget.Player.NetId)
+            - new Vector2(size.X / 2f, size.Y);
 
         if (widget.Popup != null && widget.PopupLabel != null && GodotObject.IsInstanceValid(widget.Popup))
         {
@@ -214,7 +215,7 @@ public static class PileViewer
             MouseFilter = Control.MouseFilterEnum.Stop,
             TooltipText = DragHint,
         };
-        root.GuiInput += ev => HandleDragInput(root, ev);
+        root.GuiInput += ev => HandleDragInput(player.NetId, root, ev);
         var style = new StyleBoxFlat
         {
             BgColor = new Color(StripBg, Settings.Opacity),
@@ -250,7 +251,7 @@ public static class PileViewer
             MouseFilter = Control.MouseFilterEnum.Stop,
             TooltipText = PileName(pileType) + "\n" + DragHint,
         };
-        button.GuiInput += ev => HandleDragInput(button, ev);
+        button.GuiInput += ev => HandleDragInput(widget.Player.NetId, button, ev);
 
         Texture2D? texture = GetPileTexture(room, pileType);
         if (texture != null)
@@ -320,41 +321,43 @@ public static class PileViewer
             string.Join("/", w.Counts.Select(c => c.Text))));
     }
 
-    /// <summary>Presses a slot on the first strip, as if clicked (auto-test only).</summary>
-    private const string DragHint = "Shift+drag to move the strips (reset in the F1 menu)";
+    private const string DragHint = "Shift+drag to move this strip (reset in the F1 menu)";
 
     private static bool _dragging;
+
+    private static ulong _dragNetId;
 
     private static Vector2 _dragStartMouse;
 
     private static Vector2 _dragStartOffset;
 
     /// <summary>
-    /// Shift+left-drag on any strip moves all strips (one shared offset, saved on release; reset from the
+    /// Shift+left-drag moves just that teammate's strip (its own offset, saved on release; reset from the
     /// F1 menu). Shift events are consumed so they don't also press a slot.
     /// </summary>
-    internal static void HandleDragInput(Control control, InputEvent ev)
+    internal static void HandleDragInput(ulong netId, Control control, InputEvent ev)
     {
         if (ev is InputEventMouseButton mb)
         {
             if (mb.ButtonIndex == MouseButton.Left && mb.Pressed && mb.ShiftPressed)
             {
                 _dragging = true;
+                _dragNetId = netId;
                 _dragStartMouse = mb.GlobalPosition;
-                _dragStartOffset = Settings.Offset;
+                _dragStartOffset = Settings.GetOffset(netId);
                 control.AcceptEvent();
             }
             else if (mb.ButtonIndex == MouseButton.Left && !mb.Pressed && _dragging)
             {
                 _dragging = false;
                 Settings.Save();
-                ModLog.Info($"PileViewer: strip offset saved {Settings.Offset}");
+                ModLog.Info($"PileViewer: strip offset saved for player {_dragNetId}: {Settings.GetOffset(_dragNetId)}");
                 control.AcceptEvent();
             }
         }
         else if (ev is InputEventMouseMotion mm && _dragging)
         {
-            Settings.Offset = _dragStartOffset + (mm.GlobalPosition - _dragStartMouse);
+            Settings.SetOffset(_dragNetId, _dragStartOffset + (mm.GlobalPosition - _dragStartMouse));
             control.AcceptEvent();
         }
     }
@@ -365,13 +368,15 @@ public static class PileViewer
         Widget? widget = _widgets.Values.FirstOrDefault();
         if (widget == null) return;
         Control target = widget.Root;
+        ulong id = widget.Player.NetId;
         Vector2 start = target.GlobalPosition + new Vector2(5f, 5f);
-        HandleDragInput(target, new InputEventMouseButton { ButtonIndex = MouseButton.Left, Pressed = true, ShiftPressed = true, GlobalPosition = start });
-        HandleDragInput(target, new InputEventMouseMotion { GlobalPosition = start + delta / 2f, ShiftPressed = true });
-        HandleDragInput(target, new InputEventMouseMotion { GlobalPosition = start + delta, ShiftPressed = true });
-        HandleDragInput(target, new InputEventMouseButton { ButtonIndex = MouseButton.Left, Pressed = false, GlobalPosition = start + delta });
+        HandleDragInput(id, target, new InputEventMouseButton { ButtonIndex = MouseButton.Left, Pressed = true, ShiftPressed = true, GlobalPosition = start });
+        HandleDragInput(id, target, new InputEventMouseMotion { GlobalPosition = start + delta / 2f, ShiftPressed = true });
+        HandleDragInput(id, target, new InputEventMouseMotion { GlobalPosition = start + delta, ShiftPressed = true });
+        HandleDragInput(id, target, new InputEventMouseButton { ButtonIndex = MouseButton.Left, Pressed = false, GlobalPosition = start + delta });
     }
 
+    /// <summary>Presses a slot on the first strip, as if clicked (auto-test only).</summary>
     internal static void SimulatePress(PileType pileType)
     {
         Widget? widget = _widgets.Values.FirstOrDefault();

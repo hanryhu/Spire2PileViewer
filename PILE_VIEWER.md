@@ -13,6 +13,7 @@ Living notes so work can resume after an interruption. Newest status first.
 | 5 | Configurable hotkeys: F1 menu dropdown of the actual teammates (P-number + character), click a binding then press a combo (Esc cancels, Backspace clears), conflicts shown in red and block saving; defaults Shift/Ctrl/Ctrl+Shift + Z/V/C per teammate. Verified with 3 players | done | `m5` |
 | 6 | Revisions: hotkeys rank below the game (run after `NHotkeyManager._UnhandledInput`, skip keys the game maps, console open, or text editing); count badges copied per pile from the native buttons (exhaust = centered purple number); toggle renamed "Show teammates' piles"; conflicts with teammate slots not in this game are warnings (saved; lowest teammate wins); pile-screen captions name the teammate ("…into The Ironclad's draw pile…", "…start of The Ironclad's turn", "…exhausted by The Ironclad…"; English only); README screenshots via `scripts/dev-showcase.ps1` | done | `m6` |
 | 7 | Fix: a key moved off the game's mouse+keyboard map still blocked our hotkey because the keyboard-only map was also checked; now only the active map counts (per `NControllerManager.InputType`, like the game) | done | `m7` |
+| 8 | Strips drag independently: per-player offsets keyed by NetId (`stripOffsets` in settings; old shared offset dropped); F1 "Reset strip positions" clears all. Verified with 3 players | done | `m8` |
 
 Each milestone is one or more commits ending in an annotated tag `mN`, so testing can roll back with
 `git checkout mN` and rebuild.
@@ -105,7 +106,8 @@ client logs SHOT 1/2/3 — disable BetterSpire2 in settings.save mod_list first 
 - Empty exhaust pile: no native message exists (`OPEN_EMPTY_EXHAUST` missing) → English "No exhausted cards."
 - Strips hide while any capstone overlay is open (they rendered on top of the pile screen otherwise).
 - F1 is shared with BetterSpire2's menu: both open together; ours docks top-right, theirs is centered.
-- One shared drag offset for all strips (relative to each character), not per player.
+- Each strip has its own drag offset keyed by the player's NetId (Steam id online), so a friend's strip keeps
+  its spot across sessions (m8; was one shared offset before, which the user rejected).
 - Count bump animation only when a count grows (matches native AddCard; RemoveCard has no animation).
 - Hotkeys bind per teammate *position* (teammate 1 = first other player in party order), not per Steam
   account, so they keep working with different friends. Party order is the same on every client.

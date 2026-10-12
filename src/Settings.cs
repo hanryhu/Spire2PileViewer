@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text.Json;
 using Godot;
 
@@ -22,8 +23,7 @@ public static class Settings
         public float opacity { get; set; } = 0.75f;
         public bool showSelf { get; set; }
         public bool textList { get; set; }
-        public float offsetX { get; set; }
-        public float offsetY { get; set; }
+        public Dictionary<string, float[]>? stripOffsets { get; set; }
         public Dictionary<string, string>? hotkeys { get; set; }
     }
 
@@ -42,8 +42,22 @@ public static class Settings
     /// <summary>Clicking a slot shows a text list above the strip instead of the game's card screen.</summary>
     public static bool TextList;
 
-    /// <summary>Drag offset applied to every strip, relative to its default spot above the character.</summary>
-    public static Vector2 Offset = Vector2.Zero;
+    /// <summary>
+    /// Per-strip drag offsets relative to the default spot above the character, keyed by the player's NetId
+    /// (their Steam id online), so each teammate's strip keeps its own position across sessions.
+    /// </summary>
+    private static readonly Dictionary<ulong, Vector2> _offsets = new();
+
+    public static Vector2 GetOffset(ulong netId) => _offsets.TryGetValue(netId, out Vector2 v) ? v : Vector2.Zero;
+
+    public static void SetOffset(ulong netId, Vector2 offset)
+    {
+        if (offset == Vector2.Zero) _offsets.Remove(netId);
+        else _offsets[netId] = offset;
+    }
+
+    public static string DescribeOffsets() =>
+        _offsets.Count == 0 ? "none" : string.Join(", ", _offsets.Select(kv => $"{kv.Key}={kv.Value}"));
 
     // Auto-test runs use their own file (reset at start) so they never touch the player's real settings.
     private static string FilePath => Path.Combine(OS.GetUserDataDir(),
@@ -75,9 +89,13 @@ public static class Settings
             Opacity = Math.Clamp(dto.opacity, 0f, 1f);
             ShowSelf = dto.showSelf;
             TextList = dto.textList;
-            Offset = new Vector2(dto.offsetX, dto.offsetY);
+            _offsets.Clear();
+            foreach (var (key, xy) in dto.stripOffsets ?? new Dictionary<string, float[]>())
+            {
+                if (ulong.TryParse(key, out ulong netId) && xy is { Length: 2 }) _offsets[netId] = new Vector2(xy[0], xy[1]);
+            }
             Hotkeys.Deserialize(dto.hotkeys);
-            ModLog.Info($"Settings loaded: enabled={Enabled} scale={Scale} opacity={Opacity} showSelf={ShowSelf} textList={TextList} offset={Offset}");
+            ModLog.Info($"Settings loaded: enabled={Enabled} scale={Scale} opacity={Opacity} showSelf={ShowSelf} textList={TextList} offsets={DescribeOffsets()}");
         }
         catch (Exception ex)
         {
@@ -96,8 +114,7 @@ public static class Settings
                 opacity = Opacity,
                 showSelf = ShowSelf,
                 textList = TextList,
-                offsetX = Offset.X,
-                offsetY = Offset.Y,
+                stripOffsets = _offsets.ToDictionary(kv => kv.Key.ToString(), kv => new[] { kv.Value.X, kv.Value.Y }),
                 hotkeys = Hotkeys.Serialize(),
             };
             File.WriteAllText(FilePath, JsonSerializer.Serialize(dto, new JsonSerializerOptions { WriteIndented = true }));
@@ -108,11 +125,11 @@ public static class Settings
         }
     }
 
-    public static void ResetPosition()
+    public static void ResetPositions()
     {
-        Offset = Vector2.Zero;
+        _offsets.Clear();
         Save();
-        ModLog.Info("Settings: strip position reset");
+        ModLog.Info("Settings: strip positions reset");
     }
 
     public static void ResetAll()
@@ -122,7 +139,7 @@ public static class Settings
         Opacity = 0.75f;
         ShowSelf = false;
         TextList = false;
-        Offset = Vector2.Zero;
+        _offsets.Clear();
         Hotkeys.Deserialize(null);
         Save();
         ModLog.Info("Settings: all reset to defaults");

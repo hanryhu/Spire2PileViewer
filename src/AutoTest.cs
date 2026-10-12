@@ -264,13 +264,14 @@ public static class AutoTest
         await Wait(0.5);
         Log($"menu: re-enabled → {PileViewer.DescribeState()}");
 
-        // --- Shift+drag moves all strips; the menu's reset button puts them back ---
+        // --- Shift+drag moves only that strip (others stay put); the menu's reset button puts them all back ---
+        Log($"before drag: state: {PileViewer.DescribeState()}");
         PileViewer.SimulateDrag(new Vector2(-40f, -60f));
         await Wait(0.5);
-        Log($"after drag: offset={Settings.Offset} state: {PileViewer.DescribeState()}");
+        Log($"after drag (first strip only): offsets={Settings.DescribeOffsets()} state: {PileViewer.DescribeState()}");
         SettingsMenu.ResetPositionButton!.EmitSignal(BaseButton.SignalName.Pressed);
         await Wait(0.5);
-        Log($"after menu reset: offset={Settings.Offset} state: {PileViewer.DescribeState()}");
+        Log($"after menu reset: offsets={Settings.DescribeOffsets()} state: {PileViewer.DescribeState()}");
         Log($"settings file: scale={Settings.Scale} opacity={Settings.Opacity} enabled={Settings.Enabled}");
 
         await ExerciseHotkeys();

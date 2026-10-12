@@ -209,7 +209,7 @@ public static class SettingsMenu
 
         AddHotkeysSection(box);
 
-        ResetPositionButton = AddButton(box, "Reset strip position", Settings.ResetPosition);
+        ResetPositionButton = AddButton(box, "Reset strip positions", Settings.ResetPositions);
         ResetAllButton = AddButton(box, "Reset all settings", () =>
         {
             Settings.ResetAll();
@@ -218,7 +218,7 @@ public static class SettingsMenu
 
         var hint = new Label
         {
-            Text = "Click a slot to view that pile. Shift+drag a strip to move all strips. F1 closes this menu.",
+            Text = "Click a slot to view that pile. Shift+drag a strip to move it. F1 closes this menu.",
             AutowrapMode = TextServer.AutowrapMode.WordSmart,
             CustomMinimumSize = new Vector2(PanelWidth - 28f, 0f),
         };
