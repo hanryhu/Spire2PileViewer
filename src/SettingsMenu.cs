@@ -230,7 +230,7 @@ public static class SettingsMenu
 
         AddHotkeysSection(box);
 
-        ResetPositionButton = AddButton(box, "Reset strip positions", Settings.ResetPositions);
+        ResetPositionButton = AddButton(box, "Reset strip & Hide hand button positions", Settings.ResetPositions);
 
         AddHandViewerTab(handTab);
 

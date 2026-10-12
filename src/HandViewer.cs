@@ -81,8 +81,8 @@ public static class HandViewer
 
     private static void UpdateHideButton(NCombatRoom room)
     {
-        NEndTurnButton? endTurn = room.Ui?.EndTurnButton;
-        bool show = Settings.HideHandButtonEnabled && endTurn != null && endTurn.IsVisibleInTree()
+        Control? energy = room.Ui?.EnergyCounterContainer;
+        bool show = Settings.HideHandButtonEnabled && energy != null && energy.IsVisibleInTree()
             && NCapstoneContainer.Instance?.InUse != true;
         if (!show)
         {
@@ -97,10 +97,68 @@ public static class HandViewer
         if (_hideButton.Text != text) _hideButton.Text = text;
         _hideButtonStyle!.BorderColor = HideOwnHand ? new Color(1f, 0.85f, 0.35f) : new Color(0.8f, 0.6f, 0.2f, 0.8f);
 
-        // Centered just below the End Turn button.
-        Rect2 rect = endTurn!.GetGlobalRect();
+        // Default: centered just above the energy counter (left side); plus the player's drag offset.
+        Rect2 rect = EnergyRect(energy!);
         Vector2 size = _hideButton.Size;
-        _hideButton.GlobalPosition = new Vector2(rect.Position.X + (rect.Size.X - size.X) / 2f, rect.End.Y + 4f);
+        _hideButton.GlobalPosition = new Vector2(rect.Position.X + (rect.Size.X - size.X) / 2f, rect.Position.Y - size.Y - 8f)
+            + Settings.HideButtonOffset;
+    }
+
+    /// <summary>On-screen rect of the energy counter (the container itself can be zero-sized; use its children).</summary>
+    private static Rect2 EnergyRect(Control container)
+    {
+        Rect2 rect = container.GetGlobalRect();
+        foreach (Node child in container.GetChildren())
+        {
+            if (child is Control c && c.Visible && c.Size != Vector2.Zero) rect = rect.Size == Vector2.Zero ? c.GetGlobalRect() : rect.Merge(c.GetGlobalRect());
+        }
+        return rect;
+    }
+
+    // Drag: a plain drag moves the button (saved); a click without movement toggles the hand.
+    private const float DragThreshold = 6f;
+
+    private static bool _buttonDown;
+
+    private static bool _buttonDragged;
+
+    private static Vector2 _buttonDragStartMouse;
+
+    private static Vector2 _buttonDragStartOffset;
+
+    internal static void HandleHideButtonInput(Button button, InputEvent ev)
+    {
+        if (ev is InputEventMouseButton { ButtonIndex: MouseButton.Left } mb)
+        {
+            if (mb.Pressed)
+            {
+                _buttonDown = true;
+                _buttonDragged = false;
+                _buttonDragStartMouse = mb.GlobalPosition;
+                _buttonDragStartOffset = Settings.HideButtonOffset;
+            }
+            else
+            {
+                _buttonDown = false;
+                if (_buttonDragged)
+                {
+                    _buttonDragged = false;
+                    Settings.Save();
+                    ModLog.Info($"HandViewer: Hide hand button moved, offset {Settings.HideButtonOffset}");
+                    button.AcceptEvent(); // a drag is not a click
+                }
+            }
+        }
+        else if (ev is InputEventMouseMotion mm && _buttonDown)
+        {
+            Vector2 delta = mm.GlobalPosition - _buttonDragStartMouse;
+            if (_buttonDragged || delta.Length() > DragThreshold)
+            {
+                _buttonDragged = true;
+                Settings.HideButtonOffset = _buttonDragStartOffset + delta;
+                button.AcceptEvent();
+            }
+        }
     }
 
     private static Button CreateHideButton(NCombatRoom room)
@@ -112,7 +170,7 @@ public static class HandViewer
             FocusMode = Control.FocusModeEnum.None,
             ZIndex = 100,
             CustomMinimumSize = new Vector2(120f, 30f),
-            TooltipText = "Hide your own hand (shown as an outline) to see your teammate's hand behind it",
+            TooltipText = "Hide your own hand (shown as an outline) to see your teammate's hand behind it.\nDrag to move (reset in the F1 menu).",
         };
         _hideButtonStyle = new StyleBoxFlat
         {
@@ -130,6 +188,7 @@ public static class HandViewer
         button.AddThemeFontSizeOverride("font_size", 15);
         button.AddThemeColorOverride("font_color", new Color(0.95f, 0.85f, 0.6f));
         button.Pressed += ToggleHideOwnHand;
+        button.GuiInput += ev => HandleHideButtonInput(button, ev);
         room.AddChild(button);
         ModLog.Info("HandViewer: created hide-hand button");
         return button;

@@ -479,8 +479,42 @@ public static class AutoTest
         HandViewer.HideButton?.EmitSignal(BaseButton.SignalName.Pressed);
         await Wait(1.0);
         Log("hv7: shown again: " + HandViewer.DescribeOwnHandLook());
-        HandViewer.HideButton?.EmitSignal(BaseButton.SignalName.Pressed); // leave hidden for the screenshot
+
+        // Draggable button (real mouse events): a drag moves it without toggling; a click toggles; F1 reset restores.
+        if (HandViewer.HideButton is Button button)
+        {
+            Log("hv7: button default (above energy): " + HandViewer.DescribeState());
+            Vector2 start = button.GetGlobalRect().GetCenter();
+            await Mouse(start, pressed: true);
+            await Mouse(start + new Vector2(30f, -20f), pressed: null);
+            await Mouse(start + new Vector2(80f, -50f), pressed: null);
+            await Mouse(start + new Vector2(80f, -50f), pressed: false);
+            Log($"hv7: after drag: offset={Settings.HideButtonOffset} {HandViewer.DescribeState()}");
+            Vector2 now = button.GetGlobalRect().GetCenter();
+            await Mouse(now, pressed: true);
+            await Mouse(now, pressed: false);
+            Log("hv7: after click: " + HandViewer.DescribeState());
+            SettingsMenu.Open();
+            SettingsMenu.ResetPositionButton!.EmitSignal(BaseButton.SignalName.Pressed);
+            SettingsMenu.Close();
+            await Wait(0.5);
+            Log($"hv7: after F1 reset: offset={Settings.HideButtonOffset} {HandViewer.DescribeState()}");
+        }
+        if (!HandViewer.HideOwnHand) HandViewer.HideButton?.EmitSignal(BaseButton.SignalName.Pressed); // leave hidden for the screenshot
         await Wait(1.0);
+    }
+
+    /// <summary>Real mouse event at a viewport position (converted to window pixels): press/release, or motion if null.</summary>
+    private static async Task Mouse(Vector2 viewportPos, bool? pressed)
+    {
+        var tree = (SceneTree)Engine.GetMainLoop();
+        Vector2 point = viewportPos * ((Vector2)DisplayServer.WindowGetSize() / tree.Root.GetVisibleRect().Size);
+        InputEvent ev = pressed is bool p
+            ? new InputEventMouseButton { ButtonIndex = MouseButton.Left, Pressed = p, Position = point, GlobalPosition = point,
+                ButtonMask = p ? MouseButtonMask.Left : 0 }
+            : new InputEventMouseMotion { Position = point, GlobalPosition = point, ButtonMask = MouseButtonMask.Left };
+        Input.ParseInputEvent(ev);
+        await Wait(0.2);
     }
 
     /// <summary>
