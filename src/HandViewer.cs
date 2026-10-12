@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Godot;
+using MegaCrit.Sts2.Core.Combat;
 using MegaCrit.Sts2.Core.Entities.Cards;
 using MegaCrit.Sts2.Core.Entities.Players;
 using MegaCrit.Sts2.Core.Helpers;
@@ -252,6 +253,9 @@ public static class HandViewer
     /// <summary>Teammate card under the mouse (native closeup), or null.</summary>
     private static NHandCardHolder? _focused;
 
+    // hv10: glow last applied to each shown holder (null = no glow), so the highlight only animates on change.
+    private static readonly Dictionary<NHandCardHolder, Color?> _glow = new();
+
     private static double _nextVisualRefresh;
 
     /// <summary>How far (container units) the teammate's cards sit above yours: "% of card visible" of a card.</summary>
@@ -296,6 +300,7 @@ public static class HandViewer
             if (!cards.Contains(_shown[i].Model))
             {
                 if (GodotObject.IsInstanceValid(_shown[i].Holder)) _shown[i].Holder.QueueFree();
+                _glow.Remove(_shown[i].Holder);
                 _shown.RemoveAt(i);
             }
         }
@@ -358,18 +363,73 @@ public static class HandViewer
             if (holder.Modulate != target) holder.Modulate = target;
         }
 
-        // The game only refreshes card nodes it can find (NCard.FindOnTable), which excludes ours — refresh
-        // costs/numbers ourselves a few times a second.
+        // The game only refreshes card nodes it can find (NCard.FindOnTable) and holders inside its own hand
+        // container, which excludes ours — refresh costs/numbers and the playable glow a few times a second.
         double now = Time.GetTicksMsec() / 1000.0;
         if (now >= _nextVisualRefresh)
         {
             _nextVisualRefresh = now + 0.25;
-            foreach (var (_, holder) in _shown)
+            foreach (var (model, holder) in _shown)
             {
-                if (GodotObject.IsInstanceValid(holder)) holder.CardNode?.UpdateVisuals(PileType.Hand, CardPreviewMode.Normal);
+                if (!GodotObject.IsInstanceValid(holder) || holder.CardNode is not NCard node) continue;
+                node.UpdateVisuals(PileType.Hand, CardPreviewMode.Normal);
+                ApplyGlow(holder, node, TeammateGlow(model, viewed));
             }
         }
     }
+
+    /// <summary>
+    /// hv10: the glow the teammate would see on this card in their own hand (NHandCardHolder.UpdateCard: red, gold,
+    /// or playable when CardModel.CanPlay, which already uses the owner's energy/stars and hooks), plus their turn
+    /// state: no glow once they've pressed End Turn, outside their play phase, or while others take an extra turn.
+    /// (Natively your own cards keep glowing after End Turn but your whole hand drops away; a teammate's hand has
+    /// no such cue, so the glow carries it.) Null means no glow.
+    /// </summary>
+    internal static Color? TeammateGlow(CardModel card, Player owner)
+    {
+        CombatManager combat = CombatManager.Instance;
+        if (!combat.IsInProgress || owner.PlayerCombatState?.Phase != PlayerTurnPhase.Play) return null;
+        if (combat.IsPlayerReadyToEndTurn(owner)) return null;
+        var extra = combat.PlayersTakingExtraTurn;
+        if (extra.Count > 0 && !extra.Contains(owner)) return null;
+        if (card.ShouldGlowRed) return NCardHighlight.red;
+        if (!card.CanPlay()) return null;
+        return card.ShouldGlowGold ? NCardHighlight.gold : NCardHighlight.playableColor;
+    }
+
+    private static void ApplyGlow(NHandCardHolder holder, NCard node, Color? glow)
+    {
+        if (_glow.TryGetValue(holder, out Color? applied) && applied == glow) return;
+        _glow[holder] = glow;
+        if (glow is Color color)
+        {
+            node.CardHighlight.AnimShow();
+            node.CardHighlight.Modulate = color;
+        }
+        else
+        {
+            node.CardHighlight.AnimHide();
+        }
+    }
+
+    /// <summary>Glow actually shown on a card node: "-" (none) or playable/gold/red (auto-test).</summary>
+    internal static string DescribeGlow(NCard? node)
+    {
+        if (node?.CardHighlight is not NCardHighlight hl || hl.Material is not ShaderMaterial m) return "?";
+        if (m.GetShaderParameter("width").AsSingle() < 0.04f) return "-";
+        Color c = hl.Modulate;
+        return c == NCardHighlight.red ? "red" : c == NCardHighlight.gold ? "gold" : "playable";
+    }
+
+    /// <summary>"Title=glow" for each teammate card shown, in hand order (auto-test).</summary>
+    internal static string DescribeTeammateGlow() => string.Join(", ", _shown
+        .Where(s => GodotObject.IsInstanceValid(s.Holder))
+        .Select(s => $"{s.Model.Title}={DescribeGlow(s.Holder.CardNode)}"));
+
+    /// <summary>"Title=glow" for your own native hand, in hand order (auto-test reference).</summary>
+    internal static string DescribeOwnGlow() => NPlayerHand.Instance is NPlayerHand h
+        ? string.Join(", ", h.ActiveHolders.Select(x => $"{x.CardNode?.Model?.Title}={DescribeGlow(x.CardNode)}"))
+        : "no hand";
 
     private static void ClearCards()
     {
@@ -378,6 +438,7 @@ public static class HandViewer
             if (GodotObject.IsInstanceValid(holder)) holder.QueueFree();
         }
         _shown.Clear();
+        _glow.Clear();
         _shownFor = null;
         _focused = null;
     }

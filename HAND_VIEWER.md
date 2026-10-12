@@ -21,6 +21,7 @@ Tags are `hvN` (Pile Viewer uses `mN`). Each milestone ends in an annotated tag 
 | 7.2 | Hide hand reworked (user changed mind): your hand is hidden completely (`CardHolderContainer` alpha 0, hitboxes MouseFilter Ignore so nothing is clicked by accident), the teammate's hand stays shadowed with its own lighter amount — new setting "Teammate hand shadow while your hand is hidden" (default 15 %). The hv7 outline look is gone | done | `hv7.2` |
 | 8 | 3+ players: in a 3-player game the host switched its view 1000 → 1001 (Regent) → 1000 with the strips' eyes; each time the rendered hand matched that client's own hand exactly; hv6 phases unaffected | done | `hv8` |
 | 9 | Hotkeys (optional, **unbound by default** so the game plays the same "without"): per-teammate **Hand** binding (4th row in the Pile Viewer tab's hotkey table, strip order draw/hand/exhaust/discard) toggles that teammate's hand; global **Hide/show my hand** binding in the Hand Viewer tab. Same capture UX, conflict rules (Hide hand = always-editable global row) and below-the-game dispatch. Verified: Shift+H / Shift+J after binding; Pile Viewer regression suite still passes | done | `hv9` |
+| 10 | Faithful playable glow: the native holder computes its glow only on creation and the game refreshes only holders in its own container, so ours went stale. Every 0.25 s we recompute it from the teammate's state (`CardModel.CanPlay` = their energy/stars + hooks; red/gold as `NHandCardHolder.UpdateCard`), and show **no glow** once they've pressed End Turn (`CombatManager.IsPlayerReadyToEndTurn`), outside their Play phase, or while others take an extra turn. Verified 2-player: start / End Turn at full energy (all off) / undo (all on) / energy spent to 0 — viewer matched the owner's own hand except the deliberate End Turn difference | done | `hv10` |
 
 ## Dev / test loop
 
@@ -66,6 +67,12 @@ Tags are `hvN` (Pile Viewer uses `mN`). Each milestone ends in an annotated tag 
 - Hand Card Count numbers stay in their native position (user: lifting them looked too high). They belong to your
   cards, which draw above the teammate layer, so they stay visible.
 - Accuracy notes: Madness doesn't exist in v0.111.0 (Enlightenment used as the played cost-changer). Vulnerable only
-  changes numbers while aiming at a target (native too), so it doesn't apply to an un-targeted hand view.
+  changes numbers while aiming at a target (native too), so it doesn't apply to an un-targeted hand view. AOE cards
+  (e.g. Echoing Slash): natively a hovered card in hand shows the un-targeted number; only while *dragging it up to
+  play* (`CardPreviewMode.MultiCreatureTargeting`) does `Hook.ModifyDamage` show the per-enemy number if every
+  hittable enemy would take the same amount (all Vulnerable → 1.5×). Teammate cards can't be dragged, so the viewer
+  always shows the hover number — same as the owner sees while hovering.
+- Glow after End Turn (hv10): natively your own cards keep their glow after you press End Turn (the whole hand
+  drops/greys only once everyone has ended); for a teammate there is no such cue, so the glow turns off instead.
   Mummified Hand not yet exercised (needs a power card played).
 - Hotkeys (hv9): shipped unbound so you can try with and without; bind them in F1 to use.

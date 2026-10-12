@@ -7,6 +7,7 @@ using MegaCrit.Sts2.Core.GameActions;
 using MegaCrit.Sts2.Core.Saves;
 using MegaCrit.Sts2.Core.Nodes.Cards.Holders;
 using MegaCrit.Sts2.Core.Nodes.Combat;
+using MegaCrit.Sts2.Core.Nodes.Rooms;
 using MegaCrit.Sts2.Core.Nodes.CommonUi;
 using System.Collections.Generic;
 using System.Linq;
@@ -17,6 +18,7 @@ using MegaCrit.Sts2.Core.Combat;
 using MegaCrit.Sts2.Core.Context;
 using MegaCrit.Sts2.Core.DevConsole;
 using MegaCrit.Sts2.Core.Entities.Cards;
+using MegaCrit.Sts2.Core.Entities.Creatures;
 using MegaCrit.Sts2.Core.Entities.Multiplayer;
 using MegaCrit.Sts2.Core.Entities.Players;
 using MegaCrit.Sts2.Core.Helpers;
@@ -469,6 +471,70 @@ public static class AutoTest
         if (observer) await ExerciseHideHand();
         await ExerciseThirdPlayer(observer);
         if (observer) await ExerciseHandHotkeys();
+        await ExerciseGlow(mutator, observer);
+    }
+
+    /// <summary>
+    /// hv10: the playable glow on the observer's view of the mutator's hand follows the mutator's state — compared
+    /// with the mutator's own native hand while their turn is open, then all off after they press End Turn, then
+    /// back after they undo it. Energy is spent first so some cards become unplayable.
+    /// </summary>
+    private static async Task ExerciseGlow(bool mutator, bool observer)
+    {
+        await Wait(2.0);
+        Player? me = mutator ? LocalContext.GetMe(RunManager.Instance.DebugOnlyGetState()!) : null;
+        Player? teammate = observer ? PileViewer.Teammates().Select(t => t.player).FirstOrDefault(p => p.NetId == 1000) : null;
+        if (observer)
+        {
+            HandViewer.View(1000);
+            if (HandViewer.HideOwnHand) HandViewer.ToggleHideOwnHand();
+        }
+
+        async Task Phase(string name, Func<Task>? mutate, Func<Player, bool>? ready)
+        {
+            if (mutator && mutate != null) await mutate();
+            if (observer && teammate != null && ready != null) await WaitUntil(() => ready(teammate), 40);
+            await Wait(1.5); // let the glow tweens and our 0.25 s refresh settle
+            if (mutator) Log($"hv10: REFERENCE {name} energy={me!.PlayerCombatState?.Energy} glow: {HandViewer.DescribeOwnGlow()}");
+            if (observer && teammate != null)
+            {
+                Log($"hv10: VIEWER {name} energy={teammate.PlayerCombatState?.Energy} ended={CombatManager.Instance.IsPlayerReadyToEndTurn(teammate)} " +
+                    $"glow: {HandViewer.DescribeTeammateGlow()}");
+            }
+            if (mutator) await Wait(8.0); // hold each state so the observer (which may lag) sees it
+        }
+
+        if (mutator) await Wait(20.0); // the observer runs extra hv7-hv9 steps first
+        await Phase("1 (start)", null, null);
+        await Phase("2 (ended turn, full energy)", async () =>
+        {
+            NCombatRoom.Instance!.Ui.EndTurnButton.CallReleaseLogic();
+            Log("hv10: mutator pressed End Turn");
+            await Wait(0.5);
+        }, t => CombatManager.Instance.IsPlayerReadyToEndTurn(t));
+        await Phase("3 (undid end turn)", async () =>
+        {
+            for (int i = 0; i < 20 && !Traverse.Create(NCombatRoom.Instance!.Ui.EndTurnButton).Property<bool>("CanTurnBeEnded").Value; i++) await Wait(0.25);
+            NCombatRoom.Instance!.Ui.EndTurnButton.CallReleaseLogic();
+            Log("hv10: mutator pressed End Turn again (undo)");
+            await Wait(0.5);
+        }, t => !CombatManager.Instance.IsPlayerReadyToEndTurn(t));
+        // Spend energy: play the most expensive playable cards (targeting the first enemy) until none is left.
+        await Phase("4 (energy spent)", async () =>
+        {
+            for (int i = 0; i < 6 && me!.PlayerCombatState!.Energy > 0; i++)
+            {
+                var card = PileType.Hand.GetPile(me).Cards.Where(c => c.CanPlay() && c.EnergyCost.GetWithModifiers(CostModifiers.All) > 0
+                        && (c.Id.Entry.StartsWith("STRIKE") || c.Id.Entry.StartsWith("DEFEND"))) // no choice prompts
+                    .OrderByDescending(c => c.EnergyCost.GetWithModifiers(CostModifiers.All)).FirstOrDefault();
+                if (card == null) break;
+                Creature? target = card.TargetType == TargetType.AnyEnemy
+                    ? CombatManager.Instance.DebugOnlyGetState()!.HittableEnemies.FirstOrDefault() : null;
+                RunManager.Instance.ActionQueueSynchronizer.RequestEnqueue(new PlayCardAction(card, target));
+                Log($"hv10: mutator played {card.Title} (energy before {me.PlayerCombatState.Energy})");
+                await Wait(2.0);
+            }
+        }, t => t.PlayerCombatState?.Energy == 0);
     }
 
     /// <summary>hv9: optional hotkeys — per-teammate Hand toggle and Hide/show my hand; unbound by default.</summary>
