@@ -1,6 +1,6 @@
 # Spire2 Pile Viewer
 
-Slay the Spire 2 co-op mod: see your teammates' draw, exhaust, and discard piles.
+Slay the Spire 2 co-op mod: see your teammates' draw, exhaust, and discard piles, and their hand.
 
 ![Strips above each teammate](assets/strips.png)
 
@@ -16,10 +16,15 @@ Slay the Spire 2 co-op mod: see your teammates' draw, exhaust, and discard piles
 ## Hand Viewer
 
 - Click the **eye** in a teammate's strip to show their hand *behind* yours, in shadow, using the game's own cards
-  (live costs and numbers from their Strength, Weak, enchantments, Snecko Eye, …). One teammate at a time.
+  (live costs and numbers from their Strength, Weak, enchantments, Snecko Eye, …). Cards glow when *they* could
+  play them (their energy; no glow once they've ended their turn). One teammate at a time.
 - **Hover** one of their cards for the game's normal closeup.
 - **Hide hand** (button above your energy; drag to move) hides your own hand so theirs is easy to read.
 - Optional hotkeys: per-teammate Hand toggle and Hide/show my hand (unbound by default; set them in F1).
+
+![Teammate's hand behind yours](assets/hand-viewer.png)
+
+![Your hand hidden, closeup of a teammate card](assets/hide-hand.png)
 
 ## Settings (F1)
 

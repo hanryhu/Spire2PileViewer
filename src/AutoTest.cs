@@ -104,6 +104,26 @@ public static class AutoTest
         await Wait(1.5);
         Log("SHOT 3 " + PileViewer.DescribeOpenView());
         await Wait(6.0);
+        PileViewer.OpenTeammatePile(0, PileType.Discard); // close it
+        await Wait(1.0);
+
+        // Hand Viewer: the teammate's hand behind yours, then your hand hidden with one of their cards in closeup.
+        HandViewer.ToggleTeammate(0);
+        await Wait(2.0);
+        Log("SHOT 4 " + HandViewer.DescribeCards());
+        await Wait(6.0);
+        HandViewer.ToggleHideOwnHand();
+        await Wait(1.0);
+        if (HandViewer.CardCenter(2) is Vector2 target)
+        {
+            var tree = (SceneTree)Engine.GetMainLoop();
+            Vector2 point = new Vector2(target.X, target.Y - 120f) * ((Vector2)DisplayServer.WindowGetSize() / tree.Root.GetVisibleRect().Size);
+            Input.ParseInputEvent(new InputEventMouseMotion { Position = point, GlobalPosition = point });
+        }
+        await Wait(1.5);
+        Log("SHOT 5 " + HandViewer.DescribeFocus());
+        await Wait(6.0);
+        HandViewer.ToggleHideOwnHand();
         Log("done");
     }
 
