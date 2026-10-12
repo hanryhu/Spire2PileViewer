@@ -11,6 +11,7 @@ Living notes so work can resume after an interruption. Newest status first.
 | 3 | Click opens the native `NCardPileScreen` on the teammate's pile (owner caption, toggle, empty → thought bubble, text popup as fallback); strips hide under overlays; hover bump. Verified in a real 2-player game (host + client) | done | `m3` |
 | 4 | Shift+drag moves all strips (saved offset); F1 settings menu (on/off, size 50–200%, background opacity, show over self, text-list mode, reset position, reset all); native-style count bump; verified live count updates over the network | done | `m4` |
 | 5 | Configurable hotkeys: F1 menu dropdown of the actual teammates (P-number + character), click a binding then press a combo (Esc cancels, Backspace clears), conflicts shown in red and block saving; defaults Shift/Ctrl/Ctrl+Shift + Z/V/C per teammate. Verified with 3 players | done | `m5` |
+| 6 | Revisions: hotkeys rank below the game (run after `NHotkeyManager._UnhandledInput`, skip keys the game maps, console open, or text editing); count badges copied per pile from the native buttons (exhaust = centered purple number); toggle renamed "Show teammates' piles"; conflicts with teammate slots not in this game are warnings (saved; lowest teammate wins); pile-screen captions name the teammate ("…into The Ironclad's draw pile…", "…start of The Ironclad's turn", "…exhausted by The Ironclad…"; English only); README screenshots via `scripts/dev-showcase.ps1` | done | `m6` |
 
 Each milestone is one or more commits ending in an annotated tag `mN`, so testing can roll back with
 `git checkout mN` and rebuild.
@@ -33,7 +34,9 @@ Each milestone is one or more commits ending in an annotated tag `mN`, so testin
    `spire2pileviewer_1000_log.txt`. Screenshot both windows (scratchpad `waitmp.sh`).
 6. Manual: `scripts/launch-mp.ps1 -Players 2` (no autotest) and click through.
 
-Flags: `-pileviewerself` shows a strip over the local player too; `-pileviewerautotest` implies it.
+Flags: `-pileviewerself` shows a strip over the local player too; `-pileviewerautotest` implies it in solo;
+`-pileviewerplayers N`; `-pileviewershowcase` stages README screenshots (`scripts/dev-showcase.ps1`; the first
+client logs SHOT 1/2/3 — disable BetterSpire2 in settings.save mod_list first for clean shots).
 
 ## Game facts (sts2 v0.111.0, decompiled at `source\repos\sts2-decompiled\v0.111.0`)
 
@@ -101,8 +104,17 @@ Flags: `-pileviewerself` shows a strip over the local player too; `-pileviewerau
   account, so they keep working with different friends. Party order is the same on every client.
 - Default hotkeys use Z/V/C (unused by the game): teammate 1 Shift+, 2 Ctrl+, 3 Ctrl+Shift+. Reserved:
   F1, F3 (BetterSpire2 hand viewer), Esc. Unsaved conflicting edits are discarded when the menu closes.
-- Input patch is a Harmony *prefix* on `NGame._Input`; consumed keys skip NGame's handler and are marked
-  handled. F1 is not consumed so BetterSpire2's menu still opens.
+- Key capture (rebinding) and F1 use a Harmony prefix on `NGame._Input`. Pile hotkeys use a postfix on
+  `NHotkeyManager._UnhandledInput` so they rank *below* the game: only unhandled keys, never while the dev
+  console is open or a text field is edited, never for a key in NInputManager's `_mKbInputMap`/`_fKbInputMap`
+  (the game matches its hotkeys on the key alone, ignoring modifiers — Shift+S still fires S).
+- Conflicts: duplicates between two editable rows (teammates in this game) and reserved keys block saving;
+  duplicates with absent-teammate rows and game-key overlaps are warnings (saved; lowest teammate wins).
+- Native count badges differ per pile: draw/discard have a red `CountContainer/Background` badge in a corner;
+  exhaust has no Background and centers a pink number with dark-purple outline over the icon. We copy
+  geometry/texture/colors/outline/font size from the native nodes, scaled 56/80.
+- The native buttons count only animated card arrivals (`CardAddFinished`), so console-added cards don't move
+  your own native counts; strips read `CardPile.Cards.Count` directly.
 
 ## Gotchas
 

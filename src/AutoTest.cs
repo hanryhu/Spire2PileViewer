@@ -15,6 +15,7 @@ using MegaCrit.Sts2.Core.Models;
 using MegaCrit.Sts2.Core.Multiplayer.Game;
 using MegaCrit.Sts2.Core.Multiplayer.Game.Lobby;
 using MegaCrit.Sts2.Core.Nodes;
+using MegaCrit.Sts2.Core.Nodes.Debug;
 using MegaCrit.Sts2.Core.Nodes.Screens.CharacterSelect;
 using MegaCrit.Sts2.Core.Nodes.Screens.MainMenu;
 using MegaCrit.Sts2.Core.Rooms;
@@ -37,6 +38,62 @@ namespace Spire2PileViewer;
 public static class AutoTest
 {
     public static readonly bool Enabled = OS.GetCmdlineArgs().Contains("-pileviewerautotest");
+
+    /// <summary>
+    /// -pileviewershowcase (with -pileviewerautotest): stage README screenshots instead of testing. Every player
+    /// puts cards in their discard and exhaust piles, then the first client logs "SHOT 1/2/3" (default view, F1 menu,
+    /// a teammate's pile screen) and holds each for a few seconds so an external script can capture the window.
+    /// </summary>
+    private static readonly bool Showcase = OS.GetCmdlineArgs().Contains("-pileviewershowcase");
+
+    private static async Task RunShowcase(bool isHost)
+    {
+        Settings.ResetForAutoTest();
+        for (int i = 0; i < 120 && !CombatManager.Instance.IsInProgress; i++) await Wait(0.25);
+        await Wait(3.0);
+
+        // Fill everyone's piles a little (networked, so every client sees the same counts).
+        RunState runState = RunManager.Instance.DebugOnlyGetState()!;
+        Player me = LocalContext.GetMe(runState)!;
+        var hand = PileType.Hand.GetPile(me).Cards.Select(c => c.Id.Entry).ToList();
+        int extraDiscards = 1 + Math.Max(ClientIndex, 0) % 2;
+        var commands = Enumerable.Range(0, extraDiscards + 1).Select(i => $"card {hand[i % hand.Count]} Discard")
+            .Append($"card {hand[^1]} Exhaust");
+        foreach (string cmd in commands)
+        {
+            RunManager.Instance.ActionQueueSynchronizer.RequestEnqueue(new ConsoleCmdGameAction(me, cmd, inCombat: true));
+            await Wait(0.7);
+        }
+        await Wait(3.0);
+        Log("showcase: piles filled — " + PileViewer.DescribeState());
+        // Shots come from the first client's window: every player's piles (its own native ones included) are filled there.
+        if (ClientIndex != 0)
+        {
+            Log("done");
+            return;
+        }
+
+        Log("SHOT 1");
+        await Wait(6.0);
+        SettingsMenu.Open();
+        await Wait(1.0);
+        Log("SHOT 2");
+        await Wait(6.0);
+        SettingsMenu.Close();
+        // Open each of the teammate's piles once so every caption gets logged, ending on discard for the shot.
+        foreach (PileType pile in new[] { PileType.Draw, PileType.Exhaust })
+        {
+            PileViewer.OpenTeammatePile(0, pile);
+            await Wait(1.0);
+            PileViewer.OpenTeammatePile(0, pile);
+            await Wait(0.5);
+        }
+        PileViewer.OpenTeammatePile(0, PileType.Discard);
+        await Wait(1.5);
+        Log("SHOT 3 " + PileViewer.DescribeOpenView());
+        await Wait(6.0);
+        Log("done");
+    }
 
     private static readonly bool Multiplayer = OS.GetCmdlineArgs().Contains("-fastmp");
 
@@ -138,7 +195,8 @@ public static class AutoTest
                 Log($"host enqueued '{cmd}'");
             }
 
-            await ExerciseStrips(mutator: ClientIndex == 0, observer: isHost);
+            if (Showcase) await RunShowcase(isHost);
+            else await ExerciseStrips(mutator: ClientIndex == 0, observer: isHost);
         }
         catch (Exception ex)
         {
@@ -249,6 +307,37 @@ public static class AutoTest
         Log($"hotkeys: Shift+C (new draw binding) → {PileViewer.DescribeOpenView()}");
         await PressKey(Key.C, shift: true);
         Log($"hotkeys: Shift+C again → {PileViewer.DescribeOpenView()}");
+
+        // Milestone 6: hotkeys rank below the game.
+        // (a) Dev console open → our hotkeys stay quiet.
+        NDevConsole.Instance.ShowConsole();
+        await Wait(0.5);
+        await PressKey(Key.C, shift: true);
+        Log($"hotkeys: Shift+C with console open → {PileViewer.DescribeOpenView()}");
+        NDevConsole.Instance.HideConsole();
+        await Wait(0.5);
+
+        // (b) A binding on a key the game uses (S = discard pile) saves with a warning, and the game keeps the key.
+        SettingsMenu.Open();
+        SettingsMenu.TeammatePicker!.Select(0);
+        SettingsMenu.GetHotkeyButton(0)!.EmitSignal(BaseButton.SignalName.Pressed);
+        await PressKey(Key.S, shift: true);
+        Log($"hotkeys: draw→Shift+S: status='{SettingsMenu.HotkeyStatus}' active draw={Hotkeys.Active[0, 0]}");
+        SettingsMenu.Close();
+        await PressKey(Key.S, shift: true);
+        Log($"hotkeys: Shift+S → {PileViewer.DescribeOpenView()} (game's own pile expected, not the teammate's)");
+        if (PileViewer.DescribeOpenView() != "nothing open") await PressKey(Key.Escape);
+
+        // (c) Duplicate with a teammate slot that doesn't exist this game → saved with a warning; lowest teammate wins.
+        SettingsMenu.Open();
+        SettingsMenu.GetHotkeyButton(0)!.EmitSignal(BaseButton.SignalName.Pressed);
+        await PressKey(Key.Z, ctrl: true); // teammate 2's default draw binding
+        Log($"hotkeys: draw→Ctrl+Z ({teammates.Count} teammate(s)): status='{SettingsMenu.HotkeyStatus}' active draw={Hotkeys.Active[0, 0]}");
+        SettingsMenu.Close();
+        await PressKey(Key.Z, ctrl: true);
+        Log($"hotkeys: Ctrl+Z → {PileViewer.DescribeOpenView()}");
+        await PressKey(Key.Z, ctrl: true);
+
         SettingsMenu.Open(); // leave open for the screenshot
     }
 

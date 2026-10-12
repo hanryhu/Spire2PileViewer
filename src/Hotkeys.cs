@@ -2,7 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Godot;
+using HarmonyLib;
 using MegaCrit.Sts2.Core.Entities.Cards;
+using MegaCrit.Sts2.Core.Nodes.CommonUi;
 
 namespace Spire2PileViewer;
 
@@ -76,10 +78,19 @@ public static class Hotkeys
         return map;
     }
 
-    /// <summary>Draft entries that clash with another entry or a reserved key, with a reason for each.</summary>
-    public static Dictionary<(int teammate, int slot), string> DraftConflicts()
+    /// <summary>A problem with one draft binding. Blocking ones prevent saving; warnings are saved anyway.</summary>
+    public readonly record struct Conflict(string Message, bool Blocking);
+
+    /// <summary>
+    /// Draft entries with problems. <paramref name="editableTeammates"/> is how many teammate rows the menu
+    /// lets you edit (the teammates actually in the game, or all of them outside a run):
+    /// - reserved key, or a duplicate between two editable rows → blocking;
+    /// - duplicate with a row you can't edit (no such teammate this game) → warning; the lowest teammate wins;
+    /// - base key used by one of the game's own hotkeys → warning; the game's hotkey takes precedence.
+    /// </summary>
+    public static Dictionary<(int teammate, int slot), Conflict> DraftConflicts(int editableTeammates)
     {
-        var conflicts = new Dictionary<(int, int), string>();
+        var conflicts = new Dictionary<(int, int), Conflict>();
         for (int t = 0; t < MaxTeammates; t++)
         {
             for (int s = 0; s < PileViewer.SlotPiles.Length; s++)
@@ -87,37 +98,76 @@ public static class Hotkeys
                 if (Draft[t, s] is not KeyCombo combo) continue;
                 if (Reserved.Contains(combo))
                 {
-                    conflicts[(t, s)] = $"{combo} is reserved";
+                    conflicts[(t, s)] = new Conflict($"{combo} is reserved", Blocking: true);
                     continue;
                 }
-                for (int t2 = 0; t2 < MaxTeammates; t2++)
+                Conflict? found = null;
+                for (int t2 = 0; t2 < MaxTeammates && found is not { Blocking: true }; t2++)
                 {
                     for (int s2 = 0; s2 < PileViewer.SlotPiles.Length; s2++)
                     {
-                        if ((t2 != t || s2 != s) && Draft[t2, s2] == combo)
+                        if ((t2 == t && s2 == s) || Draft[t2, s2] != combo) continue;
+                        string other = $"Teammate {t2 + 1} {PileViewer.PileName(PileViewer.SlotPiles[s2])}";
+                        if (t < editableTeammates && t2 < editableTeammates)
                         {
-                            conflicts[(t, s)] = $"{combo} is also Teammate {t2 + 1} {PileViewer.PileName(PileViewer.SlotPiles[s2])}";
+                            found = new Conflict($"{combo} is also {other}", Blocking: true);
+                            break;
                         }
+                        int winner = Math.Min(t, t2) + 1;
+                        found = new Conflict($"{combo} is also {other} (no such teammate this game) — Teammate {winner} gets it", Blocking: false);
                     }
                 }
+                if (found == null && NativeAction(combo.Key) is string action)
+                {
+                    found = new Conflict($"{OS.GetKeycodeString(combo.Key)} is the game's '{action}' hotkey, which takes precedence", Blocking: false);
+                }
+                if (found != null) conflicts[(t, s)] = found.Value;
             }
         }
         return conflicts;
     }
 
-    /// <summary>Promotes the draft to active and saves, unless it has conflicts. Returns whether it saved.</summary>
-    public static bool TryCommitDraft()
+    /// <summary>Promotes the draft to active and saves, unless it has blocking conflicts. Returns whether it saved.</summary>
+    public static bool TryCommitDraft(int editableTeammates)
     {
-        if (DraftConflicts().Count > 0) return false;
+        if (DraftConflicts(editableTeammates).Values.Any(c => c.Blocking)) return false;
         Active = (KeyCombo?[,])Draft.Clone();
         Settings.Save();
         ModLog.Info("Hotkeys saved: " + string.Join(", ", Serialize().Select(kv => $"{kv.Key}={kv.Value}")));
         return true;
     }
 
+    /// <summary>
+    /// The game's own hotkey bound to this key, if any. The game matches its hotkeys on the key alone
+    /// (NInputManager.ProcessHotkeyInput ignores modifiers), so Shift+S still fires its S hotkey.
+    /// </summary>
+    public static string? NativeAction(Key key)
+    {
+        try
+        {
+            object? manager = NInputManager.Instance;
+            if (manager == null) return null;
+            foreach (string field in new[] { "_mKbInputMap", "_fKbInputMap" })
+            {
+                if (Traverse.Create(manager).Field(field).GetValue() is Dictionary<StringName, Key> map)
+                {
+                    foreach (var (action, mapped) in map)
+                    {
+                        if (mapped == key) return action.ToString();
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            ModLog.Error("Hotkeys.NativeAction", ex);
+        }
+        return null;
+    }
+
     public static void ResetDraftToDefaults() => Draft = Defaults();
 
-    /// <summary>If the key event matches an active binding, the (teammate, pile) it opens.</summary>
+    /// <summary>If the key event matches an active binding, the (teammate, pile) it opens — the lowest teammate on duplicates.</summary>
     public static (int teammate, PileType pile)? Match(InputEventKey ev)
     {
         for (int t = 0; t < MaxTeammates; t++)

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.RegularExpressions;
 using Godot;
 using HarmonyLib;
 using MegaCrit.Sts2.Core.Combat;
@@ -73,7 +74,9 @@ public static class PileViewer
 
     private static bool _frameHooked;
 
-    private static bool _loggedIconTree;
+    private static readonly HashSet<PileType> _loggedNativeTrees = new();
+
+    private static readonly HashSet<PileType> _loggedBadges = new();
 
     private static bool _loggedFrameError;
 
@@ -272,19 +275,21 @@ public static class PileViewer
             button.Text = PileName(pileType)[..2];
         }
 
-        // Count badge, styled like the native pile button's (badge texture + centered number, bottom-right).
-        const float badgeSize = 26f;
+        // Count badge copied from the native pile button (each pile has its own placement and art — e.g. the
+        // exhaust badge is purple and centered on the icon), scaled from the native button to the slot.
+        BadgeStyle badgeStyle = GetBadgeStyle(room, pileType);
         var badge = new TextureRect
         {
-            Texture = LoadTexture(BadgeTexturePath),
+            Texture = badgeStyle.Texture,
             ExpandMode = TextureRect.ExpandModeEnum.IgnoreSize,
             StretchMode = TextureRect.StretchModeEnum.Scale,
             MouseFilter = Control.MouseFilterEnum.Ignore,
-            Size = new Vector2(badgeSize, badgeSize),
-            Position = new Vector2(SlotSize - badgeSize + 2f, SlotSize - badgeSize + 2f),
+            Size = badgeStyle.Size,
+            Position = badgeStyle.Position,
+            SelfModulate = badgeStyle.Tint,
         };
         button.AddChild(badge);
-        badge.PivotOffset = new Vector2(badgeSize, badgeSize) / 2f;
+        badge.PivotOffset = badgeStyle.Size / 2f;
         int slot = Array.IndexOf(SlotPiles, pileType);
         widget.Badges[slot] = badge;
 
@@ -295,10 +300,10 @@ public static class PileViewer
             VerticalAlignment = VerticalAlignment.Center,
             MouseFilter = Control.MouseFilterEnum.Ignore,
         };
-        count.AddThemeFontSizeOverride("font_size", 15);
-        count.AddThemeColorOverride("font_color", Colors.White);
-        count.AddThemeConstantOverride("outline_size", 4);
-        count.AddThemeColorOverride("font_outline_color", Colors.Black);
+        count.AddThemeFontSizeOverride("font_size", badgeStyle.FontSize);
+        count.AddThemeColorOverride("font_color", badgeStyle.TextColor);
+        count.AddThemeConstantOverride("outline_size", badgeStyle.OutlineSize);
+        count.AddThemeColorOverride("font_outline_color", badgeStyle.OutlineColor);
         badge.AddChild(count);
         count.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);
 
@@ -468,6 +473,22 @@ public static class PileViewer
     }
 
     /// <summary>Prefixes the native screen's bottom caption with whose pile this is.</summary>
+    private static readonly HashSet<PileType> _loggedCaptions = new();
+
+    /// <summary>
+    /// The native captions are written for your own piles ("...shuffled into your draw pile...", "...at the
+    /// start of each turn"); point them at the teammate instead. English wording only — other languages keep
+    /// the game's text (the gold name line above still says whose pile it is).
+    /// </summary>
+    internal static string PersonalizeCaption(string text, string owner)
+    {
+        text = Regex.Replace(text, @"\b[Yy]our\b", owner + "'s");
+        text = Regex.Replace(text, @"\beach turn\b", owner + "'s turn");
+        text = Regex.Replace(text, @"\bwere exhausted this combat\b", "were exhausted by " + owner + " this combat");
+        text = Regex.Replace(text, @"\b[Yy]ou\b", owner);
+        return text;
+    }
+
     private static void LabelScreen(NCardPileScreen screen, Player player)
     {
         try
@@ -475,7 +496,12 @@ public static class PileViewer
             if (Traverse.Create(screen).Field("_bottomLabel").GetValue() is RichTextLabel label)
             {
                 string owner = player.Character.Title.GetFormattedText();
-                label.Text = $"[center][gold]{owner}[/gold][/center]\n" + label.Text;
+                string original = label.Text;
+                label.Text = $"[center][gold]{owner}[/gold][/center]\n" + PersonalizeCaption(original, owner);
+                if (_loggedCaptions.Add(screen.Pile.Type))
+                {
+                    ModLog.Info($"PileViewer: {screen.Pile.Type} caption '{original}' → '{label.Text}'");
+                }
             }
         }
         catch (Exception ex)
@@ -543,22 +569,73 @@ public static class PileViewer
     /// The icon texture of the local player's native pile button, so the strip matches the game's art.
     /// (Duplicating the native Icon node rendered blank, so we build a fresh TextureRect instead.)
     /// </summary>
+    private static NCombatCardPile? NativeButton(NCombatRoom room, PileType pileType)
+    {
+        NCombatCardPile? native = pileType switch
+        {
+            PileType.Draw => room.Ui?.DrawPile,
+            PileType.Discard => room.Ui?.DiscardPile,
+            PileType.Exhaust => room.Ui?.ExhaustPile,
+            _ => null,
+        };
+        if (native != null && _loggedNativeTrees.Add(pileType))
+        {
+            ModLog.Info($"PileViewer: native {pileType} pile button tree:\n" + DescribeTree(native, 0));
+        }
+        return native;
+    }
+
+    private readonly record struct BadgeStyle(Texture2D? Texture, Vector2 Position, Vector2 Size, Color Tint,
+        Color TextColor, Color OutlineColor, int OutlineSize, int FontSize);
+
+    /// <summary>
+    /// Placement and look of the native button's count (CountContainer, its optional Background badge, and the
+    /// Count label's colors/outline/size), mapped from the native button onto a slot. Draw/discard use a red
+    /// badge in a corner; exhaust has no badge and centers a purple-outlined number on the icon.
+    /// Falls back to a bottom-right badge.
+    /// </summary>
+    private static BadgeStyle GetBadgeStyle(NCombatRoom room, PileType pileType)
+    {
+        const float fallbackSize = 26f;
+        var fallback = new BadgeStyle(LoadTexture(BadgeTexturePath),
+            new Vector2(SlotSize - fallbackSize + 2f, SlotSize - fallbackSize + 2f),
+            new Vector2(fallbackSize, fallbackSize), Colors.White, Colors.White, Colors.Black, 4, 15);
+        try
+        {
+            NCombatCardPile? native = NativeButton(room, pileType);
+            Control? container = native?.GetNodeOrNull<Control>("CountContainer");
+            TextureRect? background = container?.GetNodeOrNull<TextureRect>("Background");
+            Label? label = container?.GetNodeOrNull<Label>("Count");
+            Control? icon = native?.GetNodeOrNull<Control>("Icon");
+            if (container == null || label == null || icon == null || icon.Size.X <= 0f) return fallback;
+
+            // Map native coordinates (relative to the icon, which fills our slot) onto the slot.
+            float k = SlotSize / icon.Size.X;
+            Control frame = (Control?)background ?? container;
+            Vector2 framePos = background != null ? container.Position + background.Position * container.Scale : container.Position;
+            Vector2 size = frame.Size * container.Scale * (background?.Scale ?? Vector2.One) * k;
+            Vector2 position = (framePos - icon.Position) * k;
+            Color tint = container.Modulate * container.SelfModulate * (background != null ? background.Modulate * background.SelfModulate : Colors.White);
+            var style = new BadgeStyle(background?.Texture, position, size, tint,
+                label.GetThemeColor("font_color"),
+                label.GetThemeColor("font_outline_color"),
+                Math.Max(1, (int)Math.Round(label.GetThemeConstant("outline_size") * k)),
+                Math.Max(9, (int)Math.Round(label.GetThemeFontSize("font_size") * k)));
+            if (_loggedBadges.Add(pileType)) ModLog.Info($"PileViewer: {pileType} badge {style} (k={k})");
+            return style;
+        }
+        catch (Exception ex)
+        {
+            ModLog.Error("PileViewer.GetBadgeStyle", ex);
+            return fallback;
+        }
+    }
+
     private static Texture2D? GetPileTexture(NCombatRoom room, PileType pileType)
     {
         try
         {
-            NCombatCardPile? native = pileType switch
-            {
-                PileType.Draw => room.Ui?.DrawPile,
-                PileType.Discard => room.Ui?.DiscardPile,
-                PileType.Exhaust => room.Ui?.ExhaustPile,
-                _ => null,
-            };
-            if (native != null && !_loggedIconTree)
-            {
-                _loggedIconTree = true;
-                ModLog.Info("PileViewer: native pile button tree:\n" + DescribeTree(native, 0));
-            }
+            NCombatCardPile? native = NativeButton(room, pileType);
             if (native?.GetNodeOrNull<TextureRect>("Icon")?.Texture is Texture2D texture) return texture;
         }
         catch (Exception ex)
