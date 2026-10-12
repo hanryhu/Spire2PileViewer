@@ -466,6 +466,21 @@ public static class AutoTest
         await watch;
         if (observer) await ExerciseCloseups();
         await ExerciseAccuracy(mutator, observer);
+        if (observer) await ExerciseHideHand();
+    }
+
+    /// <summary>hv7: Hide hand turns your own cards into dark silhouettes with a white outline; Show hand restores them.</summary>
+    private static async Task ExerciseHideHand()
+    {
+        Log("hv7: before: " + HandViewer.DescribeOwnHandLook());
+        HandViewer.HideButton?.EmitSignal(BaseButton.SignalName.Pressed);
+        await Wait(1.0);
+        Log("hv7: hidden: " + HandViewer.DescribeOwnHandLook() + " | " + HandViewer.DescribeState());
+        HandViewer.HideButton?.EmitSignal(BaseButton.SignalName.Pressed);
+        await Wait(1.0);
+        Log("hv7: shown again: " + HandViewer.DescribeOwnHandLook());
+        HandViewer.HideButton?.EmitSignal(BaseButton.SignalName.Pressed); // leave hidden for the screenshot
+        await Wait(1.0);
     }
 
     /// <summary>
