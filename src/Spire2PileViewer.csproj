@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <OutputType>Library</OutputType>
+        <RootNamespace>Spire2PileViewer</RootNamespace>
+        <AssemblyName>Spire2PileViewer</AssemblyName>
+        <TargetFramework>net9.0</TargetFramework>
+        <ImplicitUsings>disable</ImplicitUsings>
+        <Nullable>enable</Nullable>
+        <Version>0.1.0</Version>
+
+        <!-- Set this to your Slay the Spire 2 install directory -->
+        <Sts2Dir>C:\Program Files (x86)\Steam\steamapps\common\Slay the Spire 2</Sts2Dir>
+        <Sts2Data>$(Sts2Dir)\data_sts2_windows_x86_64</Sts2Data>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <Reference Include="sts2">
+            <HintPath>$(Sts2Data)\sts2.dll</HintPath>
+            <Private>false</Private>
+        </Reference>
+        <Reference Include="GodotSharp">
+            <HintPath>$(Sts2Data)\GodotSharp.dll</HintPath>
+            <Private>false</Private>
+        </Reference>
+        <Reference Include="0Harmony">
+            <HintPath>$(Sts2Data)\0Harmony.dll</HintPath>
+            <Private>false</Private>
+        </Reference>
+    </ItemGroup>
+
+    <ItemGroup>
+        <None Include="Spire2PileViewer.json" CopyToOutputDirectory="PreserveNewest" />
+    </ItemGroup>
+
+</Project>

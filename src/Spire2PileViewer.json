@@ -1,0 +1,11 @@
+{
+  "id": "Spire2PileViewer",
+  "name": "Spire2 Pile Viewer",
+  "author": "hanryhu",
+  "description": "Shows teammates' draw, exhaust, and discard piles above their characters in co-op. Click a slot to view that pile.",
+  "version": "v0.1.0",
+  "has_pck": false,
+  "has_dll": true,
+  "dependencies": [],
+  "affects_gameplay": false
+}
