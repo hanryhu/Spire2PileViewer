@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
 using Godot;
@@ -23,6 +24,7 @@ public static class Settings
         public bool textList { get; set; }
         public float offsetX { get; set; }
         public float offsetY { get; set; }
+        public Dictionary<string, string>? hotkeys { get; set; }
     }
 
     /// <summary>Show the strips at all.</summary>
@@ -74,6 +76,7 @@ public static class Settings
             ShowSelf = dto.showSelf;
             TextList = dto.textList;
             Offset = new Vector2(dto.offsetX, dto.offsetY);
+            Hotkeys.Deserialize(dto.hotkeys);
             ModLog.Info($"Settings loaded: enabled={Enabled} scale={Scale} opacity={Opacity} showSelf={ShowSelf} textList={TextList} offset={Offset}");
         }
         catch (Exception ex)
@@ -95,6 +98,7 @@ public static class Settings
                 textList = TextList,
                 offsetX = Offset.X,
                 offsetY = Offset.Y,
+                hotkeys = Hotkeys.Serialize(),
             };
             File.WriteAllText(FilePath, JsonSerializer.Serialize(dto, new JsonSerializerOptions { WriteIndented = true }));
         }
@@ -119,6 +123,7 @@ public static class Settings
         ShowSelf = false;
         TextList = false;
         Offset = Vector2.Zero;
+        Hotkeys.Deserialize(null);
         Save();
         ModLog.Info("Settings: all reset to defaults");
     }

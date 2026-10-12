@@ -397,13 +397,42 @@ public static class PileViewer
     /// cancel targeting, toggle closed if that pile is already open, thought bubble if the pile is empty.
     /// Falls back to the milestone-2 text popup if the native screen can't be opened.
     /// </summary>
-    private static void OnSlotPressed(Widget widget, PileType pileType)
+    private static void OnSlotPressed(Widget widget, PileType pileType) => OpenPile(widget.Player, pileType, "clicked");
+
+    /// <summary>
+    /// The other players in party order (the order everyone's client agrees on), with their P-number.
+    /// Empty outside a run.
+    /// </summary>
+    internal static List<(int number, Player player)> Teammates()
     {
-        Player player = widget.Player;
+        var result = new List<(int, Player)>();
+        var players = CombatManager.Instance.DebugOnlyGetState()?.Players ?? RunManager.Instance.DebugOnlyGetState()?.Players;
+        if (players == null) return result;
+        ulong localNetId = RunManager.Instance?.NetService?.NetId ?? 0;
+        for (int i = 0; i < players.Count; i++)
+        {
+            if (players[i] != null && players[i].NetId != localNetId) result.Add((i + 1, players[i]));
+        }
+        return result;
+    }
+
+    /// <summary>Hotkey entry point: opens teammate #index's pile (0-based among <see cref="Teammates"/>).</summary>
+    internal static bool OpenTeammatePile(int teammateIndex, PileType pileType)
+    {
+        if (!CombatManager.Instance.IsInProgress) return false;
+        var teammates = Teammates();
+        if (teammateIndex >= teammates.Count) return false;
+        OpenPile(teammates[teammateIndex].player, pileType, "hotkey");
+        return true;
+    }
+
+    private static void OpenPile(Player player, PileType pileType, string source)
+    {
+        _widgets.TryGetValue(player.NetId, out Widget? widget);
         string text = DescribePile(player, pileType);
-        ModLog.Info($"PileViewer: clicked {pileType} for player {player.NetId}: " + text.Replace('\n', '|'));
+        ModLog.Info($"PileViewer: {source} {pileType} for player {player.NetId}: " + text.Replace('\n', '|'));
         if (player.PlayerCombatState == null || !CombatManager.Instance.IsInProgress) return;
-        if (Settings.TextList)
+        if (Settings.TextList && widget != null)
         {
             ToggleTextPopup(widget, pileType, text);
             return;
@@ -411,7 +440,7 @@ public static class PileViewer
 
         try
         {
-            widget.ClosePopup();
+            widget?.ClosePopup();
             CardPile pile = pileType.GetPile(player);
             if (NTargetManager.Instance.IsInSelection) NTargetManager.Instance.CancelTargeting();
 
@@ -434,7 +463,7 @@ public static class PileViewer
         catch (Exception ex)
         {
             ModLog.Error("PileViewer: native pile screen failed, using text popup", ex);
-            ToggleTextPopup(widget, pileType, text);
+            if (widget != null) ToggleTextPopup(widget, pileType, text);
         }
     }
 
@@ -566,7 +595,7 @@ public static class PileViewer
         return string.Join("\n", lines);
     }
 
-    private static string PileName(PileType pileType) => pileType switch
+    internal static string PileName(PileType pileType) => pileType switch
     {
         PileType.Draw => "Draw pile",
         PileType.Exhaust => "Exhaust pile",

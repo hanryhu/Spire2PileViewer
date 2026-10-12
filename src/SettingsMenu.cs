@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using Godot;
 using HarmonyLib;
 using MegaCrit.Sts2.Core.Nodes;
@@ -7,15 +8,24 @@ namespace Spire2PileViewer;
 
 /// <summary>
 /// F1 settings panel. BetterSpire2 also opens its menu on F1 (centered), so this one docks to the
-/// top-right to sit beside it. Every change is saved immediately.
+/// top-right to sit beside it. Every change is saved immediately — except hotkeys, which are only
+/// saved once they have no conflicts.
 /// </summary>
 public static class SettingsMenu
 {
     public const Key Hotkey = Key.F1;
 
-    private const float PanelWidth = 340f;
+    private const float PanelWidth = 360f;
+
+    private static readonly Color ConflictColor = new(1f, 0.35f, 0.3f);
 
     private static CanvasLayer? _layer;
+
+    // Hotkeys section state.
+    private static int _selectedTeammate;
+    private static int? _capturingSlot;
+    private static readonly Button?[] _hotkeyButtons = new Button?[3];
+    private static Label? _hotkeyStatus;
 
     // Exposed for the auto-test, which drives the menu through its real controls.
     internal static CheckButton? EnabledToggle;
@@ -25,28 +35,80 @@ public static class SettingsMenu
     internal static CheckButton? TextListToggle;
     internal static Button? ResetPositionButton;
     internal static Button? ResetAllButton;
+    internal static OptionButton? TeammatePicker;
+    internal static Button? GetHotkeyButton(int slot) => _hotkeyButtons[slot];
+    internal static string HotkeyStatus => _hotkeyStatus?.Text ?? "";
 
     public static bool IsOpen => _layer != null && GodotObject.IsInstanceValid(_layer);
 
+    public static bool IsCapturing => IsOpen && _capturingSlot.HasValue;
+
+    /// <summary>
+    /// Prefix on NGame._Input: key capture for rebinding, then the pile hotkeys, then F1. Handled keys
+    /// are consumed (NGame's own handler is skipped and the event marked handled) so the game doesn't
+    /// also act on them.
+    /// </summary>
     [HarmonyPatch(typeof(NGame), "_Input")]
     public static class InputPatch
     {
-        private static void Postfix(InputEvent inputEvent)
+        private static bool Prefix(NGame __instance, InputEvent inputEvent)
         {
             try
             {
-                if (inputEvent is InputEventKey { Pressed: true } key && !key.IsEcho() && key.Keycode == Hotkey
-                    && !key.ShiftPressed && !key.CtrlPressed && !key.AltPressed)
+                if (HandleKey(inputEvent))
                 {
-                    Toggle();
+                    __instance.GetViewport()?.SetInputAsHandled();
+                    return false;
                 }
             }
             catch (Exception ex)
             {
                 ModLog.Error("SettingsMenu.InputPatch", ex);
             }
+            return true;
         }
     }
+
+    /// <summary>Returns true if the event was consumed. Public to the auto-test so it can feed real key events.</summary>
+    internal static bool HandleKey(InputEvent inputEvent)
+    {
+        if (inputEvent is not InputEventKey { Pressed: true } key || key.IsEcho()) return false;
+
+        if (IsCapturing)
+        {
+            if (IsModifier(key.Keycode)) return true; // wait for the actual key
+            int slot = _capturingSlot!.Value;
+            _capturingSlot = null;
+            if (key.Keycode == Key.Escape)
+            {
+                ModLog.Info("SettingsMenu: capture cancelled");
+            }
+            else
+            {
+                KeyCombo? combo = key.Keycode is Key.Backspace or Key.Delete ? null : KeyCombo.From(key);
+                Hotkeys.Draft[_selectedTeammate, slot] = combo;
+                ModLog.Info($"SettingsMenu: Teammate {_selectedTeammate + 1} {PileViewer.SlotPiles[slot]} = {combo?.ToString() ?? "unbound"}");
+                Hotkeys.TryCommitDraft();
+            }
+            RefreshHotkeys();
+            return true;
+        }
+
+        if (key.Keycode == Hotkey && !key.ShiftPressed && !key.CtrlPressed && !key.AltPressed)
+        {
+            Toggle();
+            return false; // let BetterSpire2's F1 menu see it too
+        }
+
+        if (Hotkeys.Match(key) is { } hit)
+        {
+            return PileViewer.OpenTeammatePile(hit.teammate, hit.pile);
+        }
+        return false;
+    }
+
+    private static bool IsModifier(Key key) =>
+        key is Key.Shift or Key.Ctrl or Key.Alt or Key.Meta or Key.Capslock;
 
     public static void Toggle()
     {
@@ -58,11 +120,16 @@ public static class SettingsMenu
     {
         if (IsOpen) _layer!.QueueFree();
         _layer = null;
+        _capturingSlot = null;
+        // Unsaved (conflicting) hotkey edits are dropped when the menu closes.
+        Hotkeys.Draft = (KeyCombo?[,])Hotkeys.Active.Clone();
     }
 
     public static void Open()
     {
-        Close();
+        if (IsOpen) _layer!.QueueFree();
+        _layer = null;
+        _capturingSlot = null;
         NGame? game = NGame.Instance;
         if (game == null) return;
 
@@ -104,6 +171,8 @@ public static class SettingsMenu
         TextListToggle = AddToggle(box, "Open piles as a text list instead of the card screen", Settings.TextList,
             v => Settings.TextList = v);
 
+        AddHotkeysSection(box);
+
         ResetPositionButton = AddButton(box, "Reset strip position", Settings.ResetPosition);
         ResetAllButton = AddButton(box, "Reset all settings", () =>
         {
@@ -122,8 +191,114 @@ public static class SettingsMenu
         box.AddChild(hint);
 
         Vector2 viewport = game.GetViewport()?.GetVisibleRect().Size ?? new Vector2(1920f, 1080f);
-        panel.Position = new Vector2(viewport.X - PanelWidth - 40f, 110f);
+        panel.Position = new Vector2(viewport.X - PanelWidth - 40f, 90f);
+        RefreshHotkeys();
         ModLog.Info("SettingsMenu: opened");
+    }
+
+    /// <summary>
+    /// Teammate dropdown (only the players actually in the run, by P-number and character; generic
+    /// "Teammate N" outside a run) plus one rebind button per pile, like the game's keybinding screen.
+    /// </summary>
+    private static void AddHotkeysSection(VBoxContainer box)
+    {
+        var heading = new Label { Text = "Hotkeys" };
+        heading.AddThemeFontSizeOverride("font_size", 16);
+        heading.AddThemeColorOverride("font_color", new Color(0.9f, 0.7f, 0.2f));
+        box.AddChild(heading);
+
+        TeammatePicker = new OptionButton { FocusMode = Control.FocusModeEnum.None };
+        TeammatePicker.AddThemeFontSizeOverride("font_size", 14);
+        var teammates = PileViewer.Teammates();
+        if (teammates.Count > 0)
+        {
+            foreach (var (number, player) in teammates.Take(Hotkeys.MaxTeammates))
+            {
+                TeammatePicker.AddItem($"P{number} — {player.Character.Title.GetFormattedText()}");
+            }
+        }
+        else
+        {
+            for (int t = 0; t < Hotkeys.MaxTeammates; t++) TeammatePicker.AddItem($"Teammate {t + 1}");
+        }
+        _selectedTeammate = Math.Clamp(_selectedTeammate, 0, TeammatePicker.ItemCount - 1);
+        TeammatePicker.Selected = _selectedTeammate;
+        TeammatePicker.ItemSelected += index =>
+        {
+            _selectedTeammate = (int)index;
+            _capturingSlot = null;
+            RefreshHotkeys();
+        };
+        box.AddChild(TeammatePicker);
+
+        for (int slot = 0; slot < PileViewer.SlotPiles.Length; slot++)
+        {
+            var row = new HBoxContainer();
+            box.AddChild(row);
+            var label = new Label { Text = PileViewer.PileName(PileViewer.SlotPiles[slot]), SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
+            label.AddThemeFontSizeOverride("font_size", 14);
+            row.AddChild(label);
+            var button = new Button { CustomMinimumSize = new Vector2(150f, 0f), FocusMode = Control.FocusModeEnum.None };
+            button.AddThemeFontSizeOverride("font_size", 14);
+            int captured = slot;
+            button.Pressed += () =>
+            {
+                _capturingSlot = captured;
+                RefreshHotkeys();
+            };
+            row.AddChild(button);
+            _hotkeyButtons[slot] = button;
+        }
+
+        _hotkeyStatus = new Label
+        {
+            AutowrapMode = TextServer.AutowrapMode.WordSmart,
+            CustomMinimumSize = new Vector2(PanelWidth - 28f, 0f),
+        };
+        _hotkeyStatus.AddThemeFontSizeOverride("font_size", 12);
+        box.AddChild(_hotkeyStatus);
+
+        AddButton(box, "Restore default hotkeys", () =>
+        {
+            Hotkeys.ResetDraftToDefaults();
+            Hotkeys.TryCommitDraft();
+            RefreshHotkeys();
+        });
+    }
+
+    private static void RefreshHotkeys()
+    {
+        if (!IsOpen || _hotkeyStatus == null) return;
+        var conflicts = Hotkeys.DraftConflicts();
+        for (int slot = 0; slot < _hotkeyButtons.Length; slot++)
+        {
+            Button? button = _hotkeyButtons[slot];
+            if (button == null || !GodotObject.IsInstanceValid(button)) continue;
+            bool conflict = conflicts.ContainsKey((_selectedTeammate, slot));
+            button.Text = _capturingSlot == slot
+                ? "Press a key…"
+                : Hotkeys.Draft[_selectedTeammate, slot]?.ToString() ?? "(unbound)";
+            if (conflict) button.AddThemeColorOverride("font_color", ConflictColor);
+            else button.RemoveThemeColorOverride("font_color");
+        }
+
+        if (_capturingSlot.HasValue)
+        {
+            _hotkeyStatus.Text = "Press a key combination. Esc cancels, Backspace clears.";
+            _hotkeyStatus.AddThemeColorOverride("font_color", new Color(0.9f, 0.9f, 0.9f));
+        }
+        else if (conflicts.Count > 0)
+        {
+            var first = conflicts.First();
+            _hotkeyStatus.Text = $"Not saved — conflict: Teammate {first.Key.teammate + 1} " +
+                $"{PileViewer.PileName(PileViewer.SlotPiles[first.Key.slot])}: {first.Value}. Rebind to resolve.";
+            _hotkeyStatus.AddThemeColorOverride("font_color", ConflictColor);
+        }
+        else
+        {
+            _hotkeyStatus.Text = "Saved. Hotkeys open the selected teammate's piles during combat.";
+            _hotkeyStatus.AddThemeColorOverride("font_color", new Color(0.6f, 0.6f, 0.6f));
+        }
     }
 
     private static CheckButton AddToggle(VBoxContainer box, string text, bool value, Action<bool> apply)

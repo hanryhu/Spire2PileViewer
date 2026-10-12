@@ -40,6 +40,19 @@ public static class AutoTest
 
     private static readonly bool Multiplayer = OS.GetCmdlineArgs().Contains("-fastmp");
 
+    /// <summary>-pileviewerplayers N: party size the host waits for (default 2).</summary>
+    private static readonly int ExpectedPlayers = ArgValue("-pileviewerplayers", 2);
+
+    /// <summary>0 for the first client (-clientId 1000), 1 for the next, ...; -1 for the host.</summary>
+    private static readonly int ClientIndex = ArgValue("-clientId", 999) - 1000;
+
+    private static int ArgValue(string name, int fallback)
+    {
+        string[] args = OS.GetCmdlineArgs();
+        int i = Array.IndexOf(args, name);
+        return i >= 0 && i + 1 < args.Length && int.TryParse(args[i + 1], out int v) ? v : fallback;
+    }
+
     private static bool _started;
 
     [HarmonyPatch(typeof(NMainMenu), "_Ready")]
@@ -100,12 +113,12 @@ public static class AutoTest
 
             if (isHost)
             {
-                for (int i = 0; i < 240 && lobby.Players.Count < 2; i++) await Wait(0.5);
+                for (int i = 0; i < 240 && lobby.Players.Count < ExpectedPlayers; i++) await Wait(0.5);
                 Log($"lobby players: {lobby.Players.Count}");
-                await Wait(2.0); // let the client pick and ready first
+                await Wait(2.0); // let the clients pick and ready first
             }
 
-            CharacterModel character = ModelDb.AllCharacters.ElementAt(isHost ? 0 : 1);
+            CharacterModel character = ModelDb.AllCharacters.ElementAt(isHost ? 0 : 1 + ClientIndex);
             lobby.SetLocalCharacter(character);
             await Wait(1.0);
             lobby.SetReady(ready: true);
@@ -125,7 +138,7 @@ public static class AutoTest
                 Log($"host enqueued '{cmd}'");
             }
 
-            await ExerciseStrips(mutator: !isHost, observer: isHost);
+            await ExerciseStrips(mutator: ClientIndex == 0, observer: isHost);
         }
         catch (Exception ex)
         {
@@ -199,7 +212,56 @@ public static class AutoTest
         await Wait(0.5);
         Log($"after menu reset: offset={Settings.Offset} state: {PileViewer.DescribeState()}");
         Log($"settings file: scale={Settings.Scale} opacity={Settings.Opacity} enabled={Settings.Enabled}");
+
+        await ExerciseHotkeys();
         Log("done — screenshot window now (menu left open)");
+    }
+
+    /// <summary>Milestone 5: pile hotkeys and native-style rebinding with conflict blocking, through real key events.</summary>
+    private static async Task ExerciseHotkeys()
+    {
+        var teammates = PileViewer.Teammates();
+        Log($"hotkeys: teammates = {string.Join(", ", teammates.Select(t => $"P{t.number} {t.player.Character.Id.Entry} ({t.player.NetId})"))}");
+        Log($"hotkeys: picker items = {string.Join(" | ", Enumerable.Range(0, SettingsMenu.TeammatePicker!.ItemCount).Select(i => SettingsMenu.TeammatePicker.GetItemText(i)))}");
+
+        await PressKey(Key.Z, shift: true);
+        Log($"hotkeys: Shift+Z → {PileViewer.DescribeOpenView()}");
+        await PressKey(Key.Z, shift: true);
+        Log($"hotkeys: Shift+Z again → {PileViewer.DescribeOpenView()}");
+        if (teammates.Count >= 2)
+        {
+            await PressKey(Key.Z, ctrl: true);
+            Log($"hotkeys: Ctrl+Z (teammate 2 draw) → {PileViewer.DescribeOpenView()}");
+            await PressKey(Key.Z, ctrl: true);
+        }
+
+        // Rebind teammate 1's draw to Shift+C (already discard) → conflict, nothing saved.
+        SettingsMenu.TeammatePicker.Select(0);
+        SettingsMenu.GetHotkeyButton(0)!.EmitSignal(BaseButton.SignalName.Pressed);
+        await PressKey(Key.C, shift: true);
+        Log($"hotkeys: draw→Shift+C: button='{SettingsMenu.GetHotkeyButton(0)!.Text}' status='{SettingsMenu.HotkeyStatus}' active draw={Hotkeys.Active[0, 0]}");
+        // Rebind discard to Shift+B → conflict resolved → saved.
+        SettingsMenu.GetHotkeyButton(2)!.EmitSignal(BaseButton.SignalName.Pressed);
+        await PressKey(Key.B, shift: true);
+        Log($"hotkeys: discard→Shift+B: status='{SettingsMenu.HotkeyStatus}' active draw={Hotkeys.Active[0, 0]} discard={Hotkeys.Active[0, 2]}");
+        SettingsMenu.Close();
+        await PressKey(Key.C, shift: true);
+        Log($"hotkeys: Shift+C (new draw binding) → {PileViewer.DescribeOpenView()}");
+        await PressKey(Key.C, shift: true);
+        Log($"hotkeys: Shift+C again → {PileViewer.DescribeOpenView()}");
+        SettingsMenu.Open(); // leave open for the screenshot
+    }
+
+    private static async Task PressKey(Key key, bool shift = false, bool ctrl = false)
+    {
+        // Inject through Godot's input pipeline (same route as a physical key press), so this also checks
+        // that the NGame._Input patch sees the key and nothing upstream swallows it.
+        var down = new InputEventKey { Keycode = key, PhysicalKeycode = key, ShiftPressed = shift, CtrlPressed = ctrl, Pressed = true };
+        var up = new InputEventKey { Keycode = key, PhysicalKeycode = key, ShiftPressed = shift, CtrlPressed = ctrl, Pressed = false };
+        Input.ParseInputEvent(down);
+        await Wait(0.1);
+        Input.ParseInputEvent(up);
+        await Wait(0.9);
     }
 
     private static async Task WatchCounts(int seconds)

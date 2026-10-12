@@ -4,7 +4,16 @@ A Slay the Spire 2 mod for co-op: a small 3-slot strip (draw | exhaust | discard
 teammate in combat, using the same icons as your own pile buttons, with live card counts. Click a slot
 to view that teammate's pile.
 
-Status: in development — see [PILE_VIEWER.md](PILE_VIEWER.md) for milestones and notes.
+## Usage
+
+- **Click** a slot to open that teammate's pile in the game's own card-pile screen (click again to close).
+- **Shift+drag** a strip to move all strips.
+- **Hotkeys** (configurable): teammate 1 — Shift+Z draw, Shift+V exhaust, Shift+C discard; teammate 2 —
+  Ctrl+…; teammate 3 — Ctrl+Shift+….
+- **F1** opens the settings: show/hide, size, background opacity, show over your own character, text-list
+  mode, hotkey rebinding (pick a teammate, click a binding, press keys), reset position / all.
+
+Works for 2–4 players. See [PILE_VIEWER.md](PILE_VIEWER.md) for development notes.
 
 ## Building
 

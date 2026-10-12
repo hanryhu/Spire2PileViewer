@@ -10,7 +10,7 @@ Living notes so work can resume after an interruption. Newest status first.
 | 2 | Load correct info: clicking a slot toggles a text popup above the strip listing that pile (grouped, name-sorted, live-updating) | done | `m2` |
 | 3 | Click opens the native `NCardPileScreen` on the teammate's pile (owner caption, toggle, empty → thought bubble, text popup as fallback); strips hide under overlays; hover bump. Verified in a real 2-player game (host + client) | done | `m3` |
 | 4 | Shift+drag moves all strips (saved offset); F1 settings menu (on/off, size 50–200%, background opacity, show over self, text-list mode, reset position, reset all); native-style count bump; verified live count updates over the network | done | `m4` |
-| 5 | Configurable hotkeys (native-style capture, conflicts block saving) with a per-teammate dropdown; 3–4 players | in progress | `m5` |
+| 5 | Configurable hotkeys: F1 menu dropdown of the actual teammates (P-number + character), click a binding then press a combo (Esc cancels, Backspace clears), conflicts shown in red and block saving; defaults Shift/Ctrl/Ctrl+Shift + Z/V/C per teammate. Verified with 3 players | done | `m5` |
 
 Each milestone is one or more commits ending in an annotated tag `mN`, so testing can roll back with
 `git checkout mN` and rebuild.
@@ -66,7 +66,9 @@ Flags: `-pileviewerself` shows a strip over the local player too; `-pileviewerau
 - `PileViewer` — strips. Updated from `SceneTree.ProcessFrame` (mod-defined Godot subclasses are not
   registered scripts, so `_Process`/`_Input` overrides never run; use signals/events).
   Strips are children of `NCombatRoom` (like BetterSpire2's labels), `ZIndex = 100`, slots are Godot `Button`s.
-- `AutoTest` — dev harness above.
+- `Settings` / `SettingsMenu` — persisted options and the F1 panel (also hosts the input patch).
+- `Hotkeys` — `KeyCombo`, active vs draft bindings, conflict detection.
+- `AutoTest` — dev harness above (`-pileviewerplayers N` for 3–4 player runs).
 - `ModLog` — per-instance log file.
 
 ## Verified behaviour (2-player auto-test, 2026-10-11)
@@ -78,6 +80,10 @@ Flags: `-pileviewerself` shows a strip over the local player too; `-pileviewerau
 - F1 menu controls apply immediately (scale, opacity, on/off, reset position) and persist.
 - Auto-test uses `spire2pileviewer_settings_autotest.json`, never the real settings file.
 - Window screenshots only work when the user isn't using the PC (Windows blocks focus stealing) — rely on logs.
+
+- 3-player run: every instance shows 2 strips; dropdown lists exactly the 2 teammates; Shift+Z / Ctrl+Z open
+  teammate 1 / 2 draw piles; rebinding into a conflict is refused (status red, active binding unchanged) and
+  resolving it saves; keys injected with `Input.ParseInputEvent` (real input pipeline) work the same.
 
 ## Decisions (made autonomously; revisit if wrong)
 
@@ -91,6 +97,12 @@ Flags: `-pileviewerself` shows a strip over the local player too; `-pileviewerau
 - F1 is shared with BetterSpire2's menu: both open together; ours docks top-right, theirs is centered.
 - One shared drag offset for all strips (relative to each character), not per player.
 - Count bump animation only when a count grows (matches native AddCard; RemoveCard has no animation).
+- Hotkeys bind per teammate *position* (teammate 1 = first other player in party order), not per Steam
+  account, so they keep working with different friends. Party order is the same on every client.
+- Default hotkeys use Z/V/C (unused by the game): teammate 1 Shift+, 2 Ctrl+, 3 Ctrl+Shift+. Reserved:
+  F1, F3 (BetterSpire2 hand viewer), Esc. Unsaved conflicting edits are discarded when the menu closes.
+- Input patch is a Harmony *prefix* on `NGame._Input`; consumed keys skip NGame's handler and are marked
+  handled. F1 is not consumed so BetterSpire2's menu still opens.
 
 ## Gotchas
 
