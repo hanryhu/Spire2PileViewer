@@ -1,4 +1,9 @@
 using System;
+using MegaCrit.Sts2.Core.Models.Enchantments;
+using MegaCrit.Sts2.Core.Models.Relics;
+using MegaCrit.Sts2.Core.Models.Powers;
+using MegaCrit.Sts2.Core.Models.Cards;
+using MegaCrit.Sts2.Core.GameActions;
 using MegaCrit.Sts2.Core.Saves;
 using MegaCrit.Sts2.Core.Nodes.Cards.Holders;
 using MegaCrit.Sts2.Core.Nodes.Combat;
@@ -460,6 +465,113 @@ public static class AutoTest
         }
         await watch;
         if (observer) await ExerciseCloseups();
+        await ExerciseAccuracy(mutator, observer);
+    }
+
+    /// <summary>
+    /// hv6: the mutator applies effects that change card numbers and costs (Strength, Dexterity, Weak, Frail,
+    /// Snecko Eye + draws, Spiked Gauntlets, a Sharp enchant, playing Enlightenment), all through networked actions.
+    /// Then both sides log every hand card's rendered cost and description: the mutator from the game's own hand,
+    /// the observer from the Hand Viewer. The two lists must match line for line.
+    /// </summary>
+    private static async Task ExerciseAccuracy(bool mutator, bool observer)
+    {
+        await Wait(1.0);
+        string Power<T>() => ModelDb.AllPowers.First(p => p is T).Id.Entry;
+        string Relic<T>() => ModelDb.AllRelics.First(r => r is T).Id.Entry;
+        string enlightenment = ModelDb.AllCards.First(c => c is Enlightenment).Id.Entry;
+
+        if (mutator)
+        {
+            CombatState combat = CombatManager.Instance.DebugOnlyGetState()!;
+            Player me = LocalContext.GetMe(RunManager.Instance.DebugOnlyGetState()!)!;
+            int myIndex = combat.Creatures.ToList().IndexOf(me.Creature);
+
+            await Enqueue(me, $"power {Power<StrengthPower>()} 3 {myIndex}", $"power {Power<DexterityPower>()} 2 {myIndex}");
+            await Wait(2.0);
+            DumpReference("A (Strength 3, Dexterity 2)");
+            await Wait(5.0);
+
+            await Enqueue(me, $"power {Power<WeakPower>()} 2 {myIndex}", $"power {Power<FrailPower>()} 2 {myIndex}");
+            await Wait(2.0);
+            DumpReference("B (+ Weak 2, Frail 2)");
+            await Wait(5.0);
+
+            // Make room, then cost changers: Snecko Eye randomizes the cost of drawn cards; Sharp on an attack.
+            var hand = PileType.Hand.GetPile(me).Cards.ToList();
+            await Enqueue(me, $"remove_card {hand[^1].Id.Entry}", $"remove_card {hand[^2].Id.Entry}",
+                $"remove_card {hand[^3].Id.Entry}", $"remove_card {hand[^4].Id.Entry}",
+                $"relic {Relic<SneckoEye>()}", $"relic {Relic<SpikedGauntlets>()}", "draw 3");
+            int strikeIndex = PileType.Hand.GetPile(me).Cards.ToList().FindIndex(c => c.Type == CardType.Attack);
+            await Enqueue(me, $"enchant {ModelDb.Enchantment<Sharp>().Id.Entry} 2 {Math.Max(strikeIndex, 0)}");
+            await Wait(2.0);
+            DumpReference("C (+ Snecko Eye draws, Spiked Gauntlets, Sharp)");
+            await Wait(5.0);
+
+            // Enlightenment: cards in hand cost at most 1 this turn.
+            await Enqueue(me, $"card {enlightenment}");
+            await Wait(1.0);
+            if (PileType.Hand.GetPile(me).Cards.FirstOrDefault(c => c is Enlightenment) is CardModel played)
+            {
+                RunManager.Instance.ActionQueueSynchronizer.RequestEnqueue(new PlayCardAction(played, null));
+                Log("hv6: mutator played Enlightenment");
+            }
+            await Wait(2.5);
+            DumpReference("D (+ played Enlightenment)");
+        }
+
+        if (observer)
+        {
+            Player? teammate = PileViewer.Teammates().Select(t => t.player).FirstOrDefault(p => p.NetId == 1000);
+            if (teammate == null) return;
+            bool Has<T>() => teammate.Creature.Powers.Any(p => p is T);
+            await WaitUntil(() => Has<StrengthPower>() && Has<DexterityPower>(), 20);
+            await Wait(1.5);
+            DumpViewer("A");
+            await WaitUntil(() => Has<WeakPower>() && Has<FrailPower>(), 20);
+            await Wait(1.5);
+            DumpViewer("B");
+            await WaitUntil(() => teammate.Relics.Any(r => r is SneckoEye)
+                && PileType.Hand.GetPile(teammate).Cards.Any(c => c.Enchantment is Sharp), 30);
+            await Wait(1.5);
+            DumpViewer("C");
+            await WaitUntil(() => !PileType.Hand.GetPile(teammate).Cards.Any(c => c is Enlightenment)
+                && SlotPilesHave(teammate, c => c is Enlightenment), 30);
+            await Wait(2.0);
+            DumpViewer("D");
+        }
+    }
+
+    private static bool SlotPilesHave(Player player, Func<CardModel, bool> match) =>
+        PileViewer.SlotPiles.Any(p => p.GetPile(player).Cards.Any(match));
+
+    private static async Task Enqueue(Player me, params string[] commands)
+    {
+        foreach (string cmd in commands)
+        {
+            RunManager.Instance.ActionQueueSynchronizer.RequestEnqueue(new ConsoleCmdGameAction(me, cmd, inCombat: true));
+            Log($"hv6: mutator enqueued '{cmd}'");
+            await Wait(0.6);
+        }
+    }
+
+    private static async Task WaitUntil(Func<bool> condition, double timeoutSeconds)
+    {
+        for (double t = 0; t < timeoutSeconds && !condition(); t += 0.25) await Wait(0.25);
+    }
+
+    private static void DumpReference(string phase)
+    {
+        var mine = HandViewer.DumpOwnHand();
+        Log($"hv6: REFERENCE {phase} ({mine.Count})");
+        foreach (string line in mine) Log($"hv6: ref{phase[0]} {line}");
+    }
+
+    private static void DumpViewer(string phase)
+    {
+        var seen = HandViewer.DumpTeammateCards();
+        Log($"hv6: VIEWER {phase} ({seen.Count})");
+        foreach (string line in seen) Log($"hv6: view{phase[0]} {line}");
     }
 
     /// <summary>hv5: point the mouse at teammate cards (through the real input pipeline) and check the native closeup.</summary>
@@ -537,6 +649,8 @@ public static class AutoTest
         SettingsMenu.HandViewerToggle.ButtonPressed = true;
         await Wait(0.5);
         Log($"hv2: Hand Viewer on → slots {PileViewer.DescribeHandSlots()}; {HandViewer.DescribeState()}");
+        SettingsMenu.HandVisibleSlider.Value = 25; // back to the defaults for the rest of the suite
+        SettingsMenu.HandShadowSlider.Value = 50;
         PileViewer.SimulatePress(0, PileType.Hand); // leave a hand view on + menu open for the screenshot
         await Wait(0.5);
         Log("hv2: final → " + HandViewer.DescribeState());

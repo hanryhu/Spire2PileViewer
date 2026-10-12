@@ -56,7 +56,6 @@ public static class HandViewer
         ClearCards();
         if (_cardLayer != null && GodotObject.IsInstanceValid(_cardLayer)) _cardLayer.QueueFree();
         _cardLayer = null;
-        if (NPlayerHand.Instance is NPlayerHand hand) ShiftIndexLabels(hand, 0f);
     }
 
     /// <summary>Show this teammate's hand (auto-test helper; same as clicking their eye when nothing is shown).</summary>
@@ -163,9 +162,6 @@ public static class HandViewer
     // Holder hitbox height in the hand scene (probe hv1): a card is 422 units tall before the hand's scale.
     private const float CardHeight = 422f;
 
-    // Native Hand Card Count label position inside a hand card holder (probe hv1).
-    private const float IndexLabelY = -288f;
-
     /// <summary>Sibling of NPlayerHand.CardHolderContainer, placed just before it so it draws behind your hand.</summary>
     private static Control? _cardLayer;
 
@@ -185,7 +181,6 @@ public static class HandViewer
     {
         NPlayerHand? hand = NPlayerHand.Instance;
         bool show = viewed != null && hand != null && NCapstoneContainer.Instance?.InUse != true;
-        if (hand != null) ShiftIndexLabels(hand, show ? RaiseFor(PileType.Hand.GetPile(viewed!).Cards.Count) : 0f);
         if (!show)
         {
             if (_cardLayer != null && GodotObject.IsInstanceValid(_cardLayer)) _cardLayer.Visible = false;
@@ -306,16 +301,20 @@ public static class HandViewer
         _focused = null;
     }
 
-    /// <summary>Lift your own Hand Card Count numbers by <paramref name="raise"/> so they clear the teammate's cards.</summary>
-    private static void ShiftIndexLabels(NPlayerHand hand, float raise)
-    {
-        foreach (NHandCardHolder holder in hand.ActiveHolders)
-        {
-            if (holder.GetNodeOrNull<Control>("HandIndex") is not Control label) continue;
-            float y = IndexLabelY - raise / Math.Max(holder.Scale.Y, 0.01f);
-            if (Math.Abs(label.Position.Y - y) > 0.5f) label.Position = new Vector2(label.Position.X, y);
-        }
-    }
+    /// <summary>"ID|cost|description" for one rendered card (auto-test comparisons).</summary>
+    internal static string DescribeCardNode(NCard? card) => card == null ? "?" :
+        $"{card.Model?.Id.Entry}|cost={card.GetNodeOrNull<Label>("%EnergyLabel")?.Text}" +
+        $"|ench={(card.GetNodeOrNull<Control>("%Enchantment") is Control e && e.Visible ? e.GetNodeOrNull<Label>("Label")?.Text ?? "?" : "-")}" +
+        $"|{card.GetNodeOrNull<RichTextLabel>("%DescriptionLabel")?.Text?.Replace('\n', ' ')}";
+
+    /// <summary>How the viewer currently renders the teammate's hand, one card per entry, in hand order (auto-test).</summary>
+    internal static List<string> DumpTeammateCards() =>
+        _shown.Where(s => GodotObject.IsInstanceValid(s.Holder)).Select(s => DescribeCardNode(s.Holder.CardNode)).ToList();
+
+    /// <summary>How the game renders your own hand, in hand order (auto-test reference for the teammate's view).</summary>
+    internal static List<string> DumpOwnHand() => NPlayerHand.Instance is NPlayerHand h
+        ? h.ActiveHolders.Select(x => DescribeCardNode(x.CardNode)).ToList()
+        : new List<string>();
 
     /// <summary>Global center of teammate card #index, e.g. to point the mouse at it (auto-test).</summary>
     internal static Vector2? CardCenter(int index) =>

@@ -28,7 +28,7 @@ public static class Settings
         public bool handViewer { get; set; } = true;
         public bool hideHandButton { get; set; } = true;
         public float handShadow { get; set; } = 0.5f;
-        public float handVisible { get; set; } = 0.3f;
+        public float handVisible { get; set; } = 0.25f;
     }
 
     /// <summary>Show the strips at all.</summary>
@@ -58,7 +58,7 @@ public static class Settings
     public static float HandShadow = 0.5f;
 
     /// <summary>% of each teammate card visible above your own hand (0..1).</summary>
-    public static float HandVisible = 0.3f;
+    public static float HandVisible = 0.25f;
 
     /// <summary>
     /// Per-strip drag offsets relative to the default spot above the character, keyed by the player's NetId
@@ -170,7 +170,7 @@ public static class Settings
         HandViewerEnabled = true;
         HideHandButtonEnabled = true;
         HandShadow = 0.5f;
-        HandVisible = 0.3f;
+        HandVisible = 0.25f;
         Save();
         ModLog.Info("Settings: all reset to defaults");
     }

@@ -15,7 +15,7 @@ Tags are `hvN` (Pile Viewer uses `mN`). Each milestone ends in an annotated tag 
 | 3 | Live data: text readout ("The Silent — Hand (7): Defend [1] · …", live energy costs) above your hand while a teammate's hand is viewed. Verified over the network: mutator `draw 2` / `card X` / `remove_card X` → observer saw 7→9→10→9 within ~1 s, matching the mutator's own hand exactly | done | `hv3` |
 | 4 | Teammate's cards drawn as native `NHandCardHolder`/`NCard`s in a layer just before `NPlayerHand.CardHolderContainer` (behind your hand), native fan layout for their hand size raised by "% of card visible" × card height, gray shadow tint; visuals refreshed 4×/s (the game only refreshes cards it finds via `NCard.FindOnTable`); your Hand Card Count labels lifted by the same amount. Verified live 7→9→10→9 re-fans | done | `hv4` |
 | 5 | Closeups: hovering a teammate card (its holder's own hitbox, `HolderFocused`/`Unfocused`) gives the native closeup from `NPlayerHand.RefreshLayout` — upright, scale 1, lifted to y = −hitbox/2+2, ZIndex 1 above your hand, neighbours slide ≤100 px, full brightness, native keyword hover tips. Verified via mouse motion through `Input.ParseInputEvent` | done | `hv5` |
-| 6 | Accuracy: energy cost and card numbers reflect the teammate's state (Madness, Snecko Eye, Mummified Hand, Spiked Gauntlets, Strength, Dexterity, Vulnerable, Weak, Frail, enchantments like Sharp) | — | `hv6` |
+| 6 | Accuracy verified over the network by rendering-diff: client's own hand vs host's Hand Viewer (cost label, enchant badge, description) identical in 4 phases — Strength 3 + Dexterity 2 (Strike 9, Defend 7), + Weak + Frail (6 / 5, Survivor red 7), + Snecko Eye draws (random costs 3/2/1) + Spiked Gauntlets + Sharp 2 (Strike 8, badge), + played Enlightenment (all cost 1). Also: default "% of card visible" 25 %, Hand Card Count numbers stay in their native position (user) | done | `hv6` |
 | 7 | Hide-hand: your own hand becomes a shadowed white outline so the teammate's hand is visible | — | `hv7` |
 | 8 | 3+ players | — | `hv8` |
 | 9 | Hotkeys (TBD — evaluate with and without) | — | `hv9` |
@@ -60,5 +60,10 @@ Tags are `hvN` (Pile Viewer uses `mN`). Each milestone ends in an annotated tag 
 - Hand slot order in the strip: draw | **hand** | exhaust | discard (as specified).
 - Only one teammate's hand is shown at a time; opening another closes the first.
 - Y-occlusion = **"% of card visible"** (user, 2026-10-12): how much of each teammate card peeks out above your hand;
-  default 30 % (mostly occluded). The slider is labelled exactly that.
+  default **25 %** (user lowered it from 30 %). The slider is labelled exactly that.
+- Hand Card Count numbers stay in their native position (user: lifting them looked too high). They belong to your
+  cards, which draw above the teammate layer, so they stay visible.
+- Accuracy notes: Madness doesn't exist in v0.111.0 (Enlightenment used as the played cost-changer). Vulnerable only
+  changes numbers while aiming at a target (native too), so it doesn't apply to an un-targeted hand view.
+  Mummified Hand not yet exercised (needs a power card played).
 - **Open — hotkeys (hv9):** decide after hv8 with and without.
