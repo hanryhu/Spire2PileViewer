@@ -1,8 +1,8 @@
 {
   "title": "Spire2 Pile Viewer",
   "description": "See your teammates' draw, exhaust, and discard piles, and their hand, in co-op.\n\n[list]\n[*] Each teammate gets a strip with live pile counts. [b]Click[/b] a pile to open it. [b]Drag[/b] a strip to move it.\n[*] Your teammate's hand is shown behind yours, with their live costs and playable glow. Hover a card to see it in full.\n[*] Click the eye in a strip to switch teammates. [b]Hide hand[/b] (or H) hides your own hand to read theirs.\n[*] Hotkeys: Shift+Z / V / C / H for teammate 1's draw / exhaust / discard / hand (Ctrl+ for teammate 2, Ctrl+Shift+ for teammate 3).\n[*] [b]F1[/b] for settings.\n[/list]\n\nSource: https://github.com/hanryhu/Spire2PileViewer\nArchitecture adapted from BetterSpire2 by jdr.",
-  "visibility": "friends_only",
-  "changeNote": "Initial release (v0.1.0).",
+  "visibility": "public",
+  "changeNote": "v0.2.0: Hand Viewer - see a teammate's hand behind yours (live costs and playable glow, hover to read a card, Hide hand to read theirs). Hand hotkeys (H, Shift/Ctrl/Ctrl+Shift+H), drag strips without Shift, simpler settings.",
   "tags": [],
   "dependencies": [],
   "contentDescriptors": []
