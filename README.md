@@ -4,33 +4,25 @@ Slay the Spire 2 co-op mod: see your teammates' draw, exhaust, and discard piles
 
 ![Strips above each teammate](assets/strips.png)
 
-- A strip with live pile counts hovers above each teammate during combat.
-- **Click** a slot to open that pile in the game's own card-pile screen (click again to close).
-- **Shift+drag** a strip to move it (each teammate's strip remembers its own spot).
-- **Hotkeys** (rebindable): teammate 1 Shift+Z / Shift+V / Shift+C (draw / exhaust / discard), teammate 2
-  Ctrl+…, teammate 3 Ctrl+Shift+…. The game's own hotkeys, the dev console, and text fields take precedence.
-- Works with 2–4 players.
+- Each teammate gets a strip with live pile counts. **Click** a pile to open it.
+- **Drag** a strip to move it.
+- Hotkeys: Shift+Z / V / C open teammate 1's draw / exhaust / discard pile (Ctrl+ for teammate 2,
+  Ctrl+Shift+ for teammate 3). The game's own hotkeys win.
 
 ![Teammate's discard pile](assets/pile-screen.png)
 
 ## Hand Viewer
 
-- Click the **eye** in a teammate's strip to show their hand *behind* yours, in shadow, using the game's own cards
-  (live costs and numbers from their Strength, Weak, enchantments, Snecko Eye, …). Cards glow when *they* could
-  play them (their energy; no glow once they've ended their turn). One teammate at a time.
-- **Hover** one of their cards for the game's normal closeup.
-- **Hide hand** (button above your energy; drag to move) hides your own hand so theirs is easy to read.
-- Optional hotkeys: per-teammate Hand toggle and Hide/show my hand (unbound by default; set them in F1).
+- Your teammate's hand is shown behind yours, using the game's own cards with their live costs and playable glow.
+- **Hover** one of their cards to see it in full.
+- Click the **eye** in a strip to switch teammates or hide their hand (Shift+H, Ctrl+H, Ctrl+Shift+H).
+- **Hide hand** (or H) hides your own hand to read theirs.
 
 ![Teammate's hand behind yours](assets/hand-viewer.png)
 
-![Your hand hidden, closeup of a teammate card](assets/hide-hand.png)
+![Your hand hidden](assets/hide-hand.png)
 
 ## Settings (F1)
-
-Two tabs. **Pile Viewer**: show/hide, size, background opacity, a strip over your own character, text-list mode, hotkey rebinding
-(pick a teammate, click a binding, press keys; conflicts are flagged), reset strip positions / all. **Hand Viewer**: enable it, the Hide hand button,
-teammate hand shadow (normal and while your hand is hidden), % of card visible, Hide/show my hand hotkey.
 
 ![F1 settings menu](assets/settings-menu.png)
 

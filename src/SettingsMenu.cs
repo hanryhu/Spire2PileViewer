@@ -44,6 +44,8 @@ public static class SettingsMenu
     internal static CheckButton? TextListToggle;
     internal static Button? ResetPositionButton;
     internal static Button? ResetAllButton;
+    internal static Button? ResetHideButtonPositionButton;
+    internal static Button? ResetHandViewerButton;
     internal static TabContainer? Tabs;
     internal static CheckButton? HandViewerToggle;
     internal static CheckButton? HideHandButtonToggle;
@@ -72,6 +74,7 @@ public static class SettingsMenu
         {
             try
             {
+                if (inputEvent is InputEventMouse mouse) HandViewer.LastMouse = mouse.Position;
                 if (HandleKey(inputEvent))
                 {
                     __instance.GetViewport()?.SetInputAsHandled();
@@ -232,37 +235,26 @@ public static class SettingsMenu
         VBoxContainer outer = box;
         box = pileTab;
 
-        EnabledToggle = AddToggle(box, "Show teammates' piles", Settings.Enabled, v => Settings.Enabled = v);
-        ScaleSlider = AddSlider(box, "Strip size", Settings.MinScale * 100f, Settings.MaxScale * 100f, Settings.Scale * 100f,
+        EnabledToggle = AddToggle(box, "Enable pile viewer", Settings.Enabled, v => Settings.Enabled = v);
+        ScaleSlider = AddSlider(box, "Size", Settings.MinScale * 100f, Settings.MaxScale * 100f, Settings.Scale * 100f,
             v => Settings.Scale = (float)v / 100f);
-        OpacitySlider = AddSlider(box, "Strip background opacity", 0f, 100f, Settings.Opacity * 100f,
+        OpacitySlider = AddSlider(box, "Background opacity", 0f, 100f, Settings.Opacity * 100f,
             v => Settings.Opacity = (float)v / 100f);
-        ShowSelfToggle = AddToggle(box, "Also show a strip over my character", Settings.ShowSelf, v => Settings.ShowSelf = v);
-        TextListToggle = AddToggle(box, "Open piles as a text list instead of the card screen", Settings.TextList,
-            v => Settings.TextList = v);
+        ShowSelfToggle = AddToggle(box, "Show my own piles", Settings.ShowSelf, v => Settings.ShowSelf = v);
+        TextListToggle = AddToggle(box, "Show piles as text", Settings.TextList, v => Settings.TextList = v);
 
         AddHotkeysSection(box);
 
-        ResetPositionButton = AddButton(box, "Reset strip & Hide hand button positions", Settings.ResetPositions);
-
-        AddHandViewerTab(handTab);
-
-        box = outer;
-        ResetAllButton = AddButton(box, "Reset all settings", () =>
+        ResetPositionButton = AddButton(box, "Reset strip positions", Settings.ResetStripPositions);
+        ResetAllButton = AddButton(box, "Reset Pile Viewer settings", () =>
         {
-            Settings.ResetAll();
+            Settings.ResetPileViewer();
             Open(); // rebuild so the controls show the defaults
         });
+        AddDragHint(box);
 
-        var hint = new Label
-        {
-            Text = "Click a slot to view that pile, or the eye to see that teammate's hand. Shift+drag a strip to move it. F1 closes this menu.",
-            AutowrapMode = TextServer.AutowrapMode.WordSmart,
-            CustomMinimumSize = new Vector2(PanelWidth - 28f, 0f),
-        };
-        hint.AddThemeFontSizeOverride("font_size", 12);
-        hint.AddThemeColorOverride("font_color", new Color(0.6f, 0.6f, 0.6f));
-        box.AddChild(hint);
+        AddHandViewerTab(handTab);
+        box = outer;
 
         Vector2 viewport = game.GetViewport()?.GetVisibleRect().Size ?? new Vector2(1920f, 1080f);
         panel.Position = new Vector2(viewport.X - PanelWidth - 40f, 90f);
@@ -310,7 +302,7 @@ public static class SettingsMenu
         {
             var row = new HBoxContainer();
             box.AddChild(row);
-            string name = Hotkeys.Slots[slot] == PileType.Hand ? "Hand (show/hide)" : PileViewer.PileName(Hotkeys.Slots[slot]);
+            string name = PileViewer.PileName(Hotkeys.Slots[slot]);
             var label = new Label { Text = name, SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
             label.AddThemeFontSizeOverride("font_size", 14);
             row.AddChild(label);
@@ -333,13 +325,14 @@ public static class SettingsMenu
         };
         _hotkeyStatus.AddThemeFontSizeOverride("font_size", 12);
         box.AddChild(_hotkeyStatus);
+    }
 
-        AddButton(box, "Restore default hotkeys", () =>
-        {
-            Hotkeys.ResetDraftToDefaults();
-            Hotkeys.TryCommitDraft(_editableTeammates);
-            RefreshHotkeys();
-        });
+    private static void AddDragHint(VBoxContainer box)
+    {
+        var hint = new Label { Text = "Drag to move buttons" };
+        hint.AddThemeFontSizeOverride("font_size", 12);
+        hint.AddThemeColorOverride("font_color", new Color(0.6f, 0.6f, 0.6f));
+        box.AddChild(hint);
     }
 
     private static string Describe((int teammate, int slot) key) => Hotkeys.Describe(key.teammate, key.slot);
@@ -371,51 +364,50 @@ public static class SettingsMenu
 
         if (_capturingSlot.HasValue)
         {
-            _hotkeyStatus.Text = "Press a key combination. Esc cancels, Backspace clears.";
+            _hotkeyStatus.Text = "Press a key (Esc cancels, Backspace clears)";
             _hotkeyStatus.AddThemeColorOverride("font_color", new Color(0.9f, 0.9f, 0.9f));
         }
         else if (conflicts.Any(c => c.Value.Blocking))
         {
             var first = conflicts.First(c => c.Value.Blocking);
-            _hotkeyStatus.Text = "Not saved — conflict: " +
-                $"{Describe(first.Key)}: {first.Value.Message}. Rebind to resolve.";
+            _hotkeyStatus.Text = $"Not saved: {first.Value.Message}";
             _hotkeyStatus.AddThemeColorOverride("font_color", ConflictColor);
         }
         else if (conflicts.Count > 0)
         {
             // Prefer a warning about the teammate being viewed.
             var first = conflicts.OrderBy(c => c.Key.teammate == _selectedTeammate ? 0 : 1).First();
-            _hotkeyStatus.Text = "Saved, but note — " +
-                $"{Describe(first.Key)}: {first.Value.Message}.";
+            _hotkeyStatus.Text = $"{Describe(first.Key)}: {first.Value.Message}";
             _hotkeyStatus.AddThemeColorOverride("font_color", WarningColor);
         }
         else
         {
-            _hotkeyStatus.Text = "Saved. Hotkeys open the selected teammate's piles during combat.";
-            _hotkeyStatus.AddThemeColorOverride("font_color", new Color(0.6f, 0.6f, 0.6f));
+            _hotkeyStatus.Text = "";
         }
+        _hotkeyStatus.Visible = _hotkeyStatus.Text != "";
         if (_hideHandHotkeyStatus != null && GodotObject.IsInstanceValid(_hideHandHotkeyStatus))
         {
             _hideHandHotkeyStatus.Text = _hotkeyStatus.Text;
             _hideHandHotkeyStatus.AddThemeColorOverride("font_color", _hotkeyStatus.GetThemeColor("font_color"));
+            _hideHandHotkeyStatus.Visible = _hotkeyStatus.Visible;
         }
     }
 
     private static void AddHandViewerTab(VBoxContainer tab)
     {
-        HandViewerToggle = AddToggle(tab, "Enable Hand Viewer (eye slot in each strip)", Settings.HandViewerEnabled,
+        HandViewerToggle = AddToggle(tab, "Enable hand viewer", Settings.HandViewerEnabled,
             v => Settings.HandViewerEnabled = v);
-        HideHandButtonToggle = AddToggle(tab, "Show the \"Hide hand\" button under End Turn", Settings.HideHandButtonEnabled,
+        HideHandButtonToggle = AddToggle(tab, "Show \"hide hand\" button", Settings.HideHandButtonEnabled,
             v => Settings.HideHandButtonEnabled = v);
         HandShadowSlider = AddSlider(tab, "Teammate hand shadow", 0f, 100f, Settings.HandShadow * 100f,
             v => Settings.HandShadow = (float)v / 100f);
         HandVisibleSlider = AddSlider(tab, "% of card visible", 0f, 100f, Settings.HandVisible * 100f,
             v => Settings.HandVisible = (float)v / 100f);
-        HandShadowHiddenSlider = AddSlider(tab, "Teammate hand shadow while your hand is hidden", 0f, 100f,
+        HandShadowHiddenSlider = AddSlider(tab, "Teammate hand shadow (when hand hidden)", 0f, 100f,
             Settings.HandShadowWhenHidden * 100f, v => Settings.HandShadowWhenHidden = (float)v / 100f);
         var hotkeyRow = new HBoxContainer();
         tab.AddChild(hotkeyRow);
-        var hotkeyLabel = new Label { Text = "Hide/show my hand hotkey", SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
+        var hotkeyLabel = new Label { Text = "Hide/show hand hotkey", SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
         hotkeyLabel.AddThemeFontSizeOverride("font_size", 14);
         hotkeyRow.AddChild(hotkeyLabel);
         _hideHandHotkeyButton = new Button { CustomMinimumSize = new Vector2(150f, 0f), FocusMode = Control.FocusModeEnum.None };
@@ -434,16 +426,13 @@ public static class SettingsMenu
         _hideHandHotkeyStatus.AddThemeFontSizeOverride("font_size", 12);
         tab.AddChild(_hideHandHotkeyStatus);
 
-        var note = new Label
+        ResetHideButtonPositionButton = AddButton(tab, "Reset \"show hand\" position", Settings.ResetHideButtonPosition);
+        ResetHandViewerButton = AddButton(tab, "Reset Hand Viewer settings", () =>
         {
-            Text = "Click the eye in a teammate's strip to show their hand behind yours (one teammate at a time). " +
-                "\"% of card visible\" is how much of each of their cards peeks out above your hand.",
-            AutowrapMode = TextServer.AutowrapMode.WordSmart,
-            CustomMinimumSize = new Vector2(PanelWidth - 28f, 0f),
-        };
-        note.AddThemeFontSizeOverride("font_size", 12);
-        note.AddThemeColorOverride("font_color", new Color(0.6f, 0.6f, 0.6f));
-        tab.AddChild(note);
+            Settings.ResetHandViewer();
+            Open(); // rebuild so the controls show the defaults
+        });
+        AddDragHint(tab);
     }
 
     private static CheckButton AddToggle(VBoxContainer box, string text, bool value, Action<bool> apply)
