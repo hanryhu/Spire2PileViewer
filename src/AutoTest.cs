@@ -467,6 +467,31 @@ public static class AutoTest
         if (observer) await ExerciseCloseups();
         await ExerciseAccuracy(mutator, observer);
         if (observer) await ExerciseHideHand();
+        await ExerciseThirdPlayer(observer);
+    }
+
+    /// <summary>
+    /// hv8 (3+ players): the host switches its view from client 1000 to client 1001 with 1001's eye and back; each
+    /// time the rendered hand must equal that client's own hand. Client 1001 logs its own hand as the reference.
+    /// </summary>
+    private static async Task ExerciseThirdPlayer(bool observer)
+    {
+        if (ExpectedPlayers < 3) return;
+        if (ClientIndex == 1)
+        {
+            await Wait(4.0);
+            foreach (string line in HandViewer.DumpOwnHand()) Log("hv8: ref1001 " + line);
+            Log("hv8: ref1001 done");
+            return;
+        }
+        if (!observer) return;
+        foreach (ulong id in new ulong[] { 1001, 1000 })
+        {
+            PileViewer.SimulatePress(PileViewer.StripIndexOf(id), PileType.Hand);
+            await Wait(2.0);
+            Log($"hv8: switched → {HandViewer.DescribeState()}");
+            foreach (string line in HandViewer.DumpTeammateCards()) Log($"hv8: view{id} " + line);
+        }
     }
 
     /// <summary>hv7: Hide hand turns your own cards into dark silhouettes with a white outline; Show hand restores them.</summary>

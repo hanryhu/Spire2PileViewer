@@ -411,6 +411,9 @@ public static class PileViewer
         button.EmitSignal(BaseButton.SignalName.Pressed);
     }
 
+    /// <summary>Strip index (creation order) of a player's strip, or -1 (auto-test only).</summary>
+    internal static int StripIndexOf(ulong netId) => _widgets.Keys.ToList().IndexOf(netId);
+
     /// <summary>Whether each strip's Hand slot is shown (auto-test only).</summary>
     internal static string DescribeHandSlots() => string.Join(", ", _widgets.Values.Select(w =>
         $"{w.Player.NetId}:{(w.Buttons[Array.IndexOf(StripSlots, PileType.Hand)]?.Visible == true ? "shown" : "hidden")}"));

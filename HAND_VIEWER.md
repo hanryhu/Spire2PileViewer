@@ -18,7 +18,7 @@ Tags are `hvN` (Pile Viewer uses `mN`). Each milestone ends in an annotated tag 
 | 6 | Accuracy verified over the network by rendering-diff: client's own hand vs host's Hand Viewer (cost label, enchant badge, description) identical in 4 phases — Strength 3 + Dexterity 2 (Strike 9, Defend 7), + Weak + Frail (6 / 5, Survivor red 7), + Snecko Eye draws (random costs 3/2/1) + Spiked Gauntlets + Sharp 2 (Strike 8, badge), + played Enlightenment (all cost 1). Also: default "% of card visible" 25 %, Hand Card Count numbers stay in their native position (user) | done | `hv6` |
 | 7 | Hide hand: your cards' body parts dimmed to a dark translucent shadow (0.12,0.12,0.16,0.4) + a white rounded outline Panel around each 300×422 card frame (the native SDF highlight can't simply be tinted white); teammate's hand shows through; re-applied per frame; Show hand restores (incl. `holder.UpdateCard()` for the playable glow) | done | `hv7` |
 | 7.1 | Hide hand button: default centered above the energy counter (`NCombatUi.EnergyCounterContainer`), plain drag moves it (6 px threshold; a drag is not a click), offset saved (`hideButtonOffset`), F1 "Reset strip & Hide hand button positions". Verified with real mouse events | done | `hv7.1` |
-| 8 | 3+ players | — | `hv8` |
+| 8 | 3+ players: in a 3-player game the host switched its view 1000 → 1001 (Regent) → 1000 with the strips' eyes; each time the rendered hand matched that client's own hand exactly; hv6 phases unaffected | done | `hv8` |
 | 9 | Hotkeys (TBD — evaluate with and without) | — | `hv9` |
 
 ## Dev / test loop
