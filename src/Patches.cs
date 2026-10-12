@@ -41,7 +41,7 @@ public static class Patches
     [HarmonyPatch(typeof(NGame), "ReturnToMainMenu")]
     public static class ReturnToMainMenuPatch
     {
-        private static void Prefix() => Safe("ReturnToMainMenu", PileViewer.Hide);
+        private static void Prefix() => Safe("ReturnToMainMenu", PileViewer.OnReturnToMainMenu);
     }
 
     private static void Safe(string context, Action action)

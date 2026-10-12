@@ -5,6 +5,7 @@ using System.Text.RegularExpressions;
 using Godot;
 using HarmonyLib;
 using MegaCrit.Sts2.Core.Combat;
+using MegaCrit.Sts2.Core.Context;
 using MegaCrit.Sts2.Core.Entities.Cards;
 using MegaCrit.Sts2.Core.Entities.Players;
 using MegaCrit.Sts2.Core.Helpers;
@@ -105,6 +106,22 @@ public static class PileViewer
         HandViewer.Reset();
     }
 
+    /// <summary>Back at the main menu: also forget whose hand was shown this run.</summary>
+    public static void OnReturnToMainMenu()
+    {
+        Hide();
+        HandViewer.ResetRun();
+    }
+
+    /// <summary>A thought bubble over your own character (like the game's "empty pile" messages).</summary>
+    internal static void Say(string message)
+    {
+        CombatState? state = CombatManager.Instance.DebugOnlyGetState();
+        if (state == null || LocalContext.GetMe(state) is not Player me) return;
+        ModLog.Info($"PileViewer: says '{message}'");
+        NCombatRoom.Instance?.CombatVfxContainer.AddChildSafely(NThoughtBubbleVfx.Create(message, me.Creature, 2.0));
+    }
+
     private static void OnFrame()
     {
         try
@@ -123,13 +140,21 @@ public static class PileViewer
     {
         NCombatRoom? room = NCombatRoom.Instance;
         CombatState? state = CombatManager.Instance.DebugOnlyGetState();
-        if (room == null || state == null || !CombatManager.Instance.IsInProgress || !Settings.Enabled)
+        if (room == null || state == null || !CombatManager.Instance.IsInProgress)
         {
             if (_widgets.Count > 0) Hide();
             return;
         }
 
         ulong localNetId = RunManager.Instance?.NetService?.NetId ?? 0;
+        // The Hand Viewer works without the strips (default hand, hotkeys, Hide hand button).
+        HandViewer.Update(room, id => state.Players.FirstOrDefault(p => p != null && p.NetId == id && p.NetId != localNetId));
+        if (!Settings.Enabled)
+        {
+            foreach (var widget in _widgets.Values) widget.Free();
+            _widgets.Clear();
+            return;
+        }
         bool includeSelf = Settings.ShowSelf || IncludeSelf || (AutoTest.Enabled && state.Players.Count == 1);
         var players = state.Players.Where(p => p != null && (includeSelf || p.NetId != localNetId)).ToList();
 
@@ -138,8 +163,6 @@ public static class PileViewer
             _widgets[stale].Free();
             _widgets.Remove(stale);
         }
-
-        HandViewer.Update(room, id => state.Players.FirstOrDefault(p => p != null && p.NetId == id && p.NetId != localNetId));
 
         foreach (var player in players)
         {
@@ -170,8 +193,10 @@ public static class PileViewer
             if (StripSlots[i] == PileType.Hand && widget.Buttons[i] is Button handButton)
             {
                 handButton.Visible = Settings.HandViewerEnabled;
-                // Highlight the Hand slot of the teammate whose hand is being shown.
-                bool viewing = HandViewer.ViewedNetId == widget.Player.NetId;
+                // Highlight the Hand slot whose hand is being shown (on your own strip: while your hand is shown).
+                bool viewing = widget.Player.NetId == (RunManager.Instance?.NetService?.NetId ?? 0)
+                    ? !HandViewer.HideOwnHand
+                    : HandViewer.ViewedNetId == widget.Player.NetId;
                 if (widget.Icons[i] is Control eye) eye.Modulate = viewing ? new Color(1.3f, 1.15f, 0.55f) : Colors.White;
             }
             string text = StripSlots[i].GetPile(widget.Player).Cards.Count.ToString();
@@ -267,7 +292,7 @@ public static class PileViewer
             FocusMode = Control.FocusModeEnum.None,
             CustomMinimumSize = new Vector2(SlotSize, SlotSize),
             MouseFilter = Control.MouseFilterEnum.Stop,
-            TooltipText = (pileType == PileType.Hand ? "Show this teammate's hand behind yours" : PileName(pileType)) + "\n" + DragHint,
+            TooltipText = PileName(pileType),
         };
         button.GuiInput += ev => HandleDragInput(widget.Player.NetId, button, ev);
 
@@ -340,7 +365,12 @@ public static class PileViewer
             string.Join("/", w.Counts.Select(c => c.Text))));
     }
 
-    private const string DragHint = "Shift+drag to move this strip (reset in the F1 menu)";
+    private const string DragHint = "Drag to move";
+
+    // A press that moves more than this is a drag (moves the strip), not a click on a slot.
+    private const float DragThreshold = 6f;
+
+    private static bool _pressed;
 
     private static bool _dragging;
 
@@ -351,37 +381,46 @@ public static class PileViewer
     private static Vector2 _dragStartOffset;
 
     /// <summary>
-    /// Shift+left-drag moves just that teammate's strip (its own offset, saved on release; reset from the
-    /// F1 menu). Shift events are consumed so they don't also press a slot.
+    /// Left-drag anywhere on a strip moves just that strip (its own offset, saved on release; reset from the F1
+    /// menu). A press that doesn't move past the threshold stays a click on the slot.
     /// </summary>
     internal static void HandleDragInput(ulong netId, Control control, InputEvent ev)
     {
-        if (ev is InputEventMouseButton mb)
+        if (ev is InputEventMouseButton { ButtonIndex: MouseButton.Left } mb)
         {
-            if (mb.ButtonIndex == MouseButton.Left && mb.Pressed && mb.ShiftPressed)
+            if (mb.Pressed)
             {
-                _dragging = true;
+                _pressed = true;
+                _dragging = false;
                 _dragNetId = netId;
                 _dragStartMouse = mb.GlobalPosition;
                 _dragStartOffset = Settings.GetOffset(netId);
-                control.AcceptEvent();
             }
-            else if (mb.ButtonIndex == MouseButton.Left && !mb.Pressed && _dragging)
+            else
             {
-                _dragging = false;
-                Settings.Save();
-                ModLog.Info($"PileViewer: strip offset saved for player {_dragNetId}: {Settings.GetOffset(_dragNetId)}");
-                control.AcceptEvent();
+                _pressed = false;
+                if (_dragging)
+                {
+                    _dragging = false;
+                    Settings.Save();
+                    ModLog.Info($"PileViewer: strip offset saved for player {_dragNetId}: {Settings.GetOffset(_dragNetId)}");
+                    control.AcceptEvent(); // a drag is not a click
+                }
             }
         }
-        else if (ev is InputEventMouseMotion mm && _dragging)
+        else if (ev is InputEventMouseMotion mm && _pressed)
         {
-            Settings.SetOffset(_dragNetId, _dragStartOffset + (mm.GlobalPosition - _dragStartMouse));
-            control.AcceptEvent();
+            Vector2 delta = mm.GlobalPosition - _dragStartMouse;
+            if (_dragging || delta.Length() > DragThreshold)
+            {
+                _dragging = true;
+                Settings.SetOffset(_dragNetId, _dragStartOffset + delta);
+                control.AcceptEvent();
+            }
         }
     }
 
-    /// <summary>Feeds a synthetic Shift+drag through the real handler (auto-test only).</summary>
+    /// <summary>Feeds a synthetic drag through the real handler (auto-test only).</summary>
     internal static void SimulateDrag(Vector2 delta)
     {
         Widget? widget = _widgets.Values.FirstOrDefault();
@@ -389,11 +428,16 @@ public static class PileViewer
         Control target = widget.Root;
         ulong id = widget.Player.NetId;
         Vector2 start = target.GlobalPosition + new Vector2(5f, 5f);
-        HandleDragInput(id, target, new InputEventMouseButton { ButtonIndex = MouseButton.Left, Pressed = true, ShiftPressed = true, GlobalPosition = start });
-        HandleDragInput(id, target, new InputEventMouseMotion { GlobalPosition = start + delta / 2f, ShiftPressed = true });
-        HandleDragInput(id, target, new InputEventMouseMotion { GlobalPosition = start + delta, ShiftPressed = true });
+        HandleDragInput(id, target, new InputEventMouseButton { ButtonIndex = MouseButton.Left, Pressed = true, GlobalPosition = start });
+        HandleDragInput(id, target, new InputEventMouseMotion { GlobalPosition = start + delta / 2f });
+        HandleDragInput(id, target, new InputEventMouseMotion { GlobalPosition = start + delta });
         HandleDragInput(id, target, new InputEventMouseButton { ButtonIndex = MouseButton.Left, Pressed = false, GlobalPosition = start + delta });
     }
+
+    /// <summary>On-screen rect of a slot on a player's strip (auto-test only).</summary>
+    internal static Rect2? SlotRect(ulong netId, PileType pileType) =>
+        _widgets.TryGetValue(netId, out var w) && w.Buttons[Array.IndexOf(StripSlots, pileType)] is Button b && b.IsVisibleInTree()
+            ? b.GetGlobalRect() : null;
 
     /// <summary>Presses a slot on the first strip, as if clicked (auto-test only).</summary>
     internal static void SimulatePress(PileType pileType) => SimulatePress(0, pileType);

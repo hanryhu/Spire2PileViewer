@@ -49,13 +49,14 @@ public static class Hotkeys
     private const int Rows = MaxTeammates + 1;
 
     public static string Describe(int row, int slot) => row == GlobalRow
-        ? "Hide/show my hand"
+        ? "Hide/show hand"
         : $"Teammate {row + 1} {PileViewer.PileName(Slots[slot])}";
 
-    // Keys the game doesn't use; modifiers distinguish teammates. Hand and Hide hand start unbound (hv9: optional).
+    // Keys the game doesn't use; modifiers distinguish teammates. Hide/show hand is plain H.
     private static readonly Dictionary<PileType, Key> DefaultKeys = new()
     {
         [PileType.Draw] = Key.Z,
+        [PileType.Hand] = Key.H,
         [PileType.Exhaust] = Key.V,
         [PileType.Discard] = Key.C,
     };
@@ -88,7 +89,25 @@ public static class Hotkeys
                 };
             }
         }
+        map[GlobalRow, 0] = new KeyCombo(Key.H, Ctrl: false, Shift: false, Alt: false);
         return map;
+    }
+
+    /// <summary>Bindings that belong to the Hand Viewer (each teammate's Hand slot and Hide/show hand).</summary>
+    public static bool IsHandBinding(int row, int slot) => row == GlobalRow ? slot == 0 : Slots[slot] == PileType.Hand;
+
+    /// <summary>Restores the defaults of the Hand Viewer bindings (hand = true) or the pile bindings, keeping the rest.</summary>
+    public static void ResetDefaults(bool hand)
+    {
+        var defaults = Defaults();
+        for (int t = 0; t < Rows; t++)
+        {
+            for (int s = 0; s < Slots.Length; s++)
+            {
+                if (IsHandBinding(t, s) == hand) Active[t, s] = defaults[t, s];
+            }
+        }
+        Draft = (KeyCombo?[,])Active.Clone();
     }
 
     /// <summary>A problem with one draft binding. Blocking ones prevent saving; warnings are saved anyway.</summary>
@@ -128,12 +147,12 @@ public static class Hotkeys
                             break;
                         }
                         int winner = Math.Min(t, t2) + 1;
-                        found = new Conflict($"{combo} is also {other} (no such teammate this game) — Teammate {winner} gets it", Blocking: false);
+                        found = new Conflict($"{combo} is also {other} (Teammate {winner} gets it)", Blocking: false);
                     }
                 }
                 if (found == null && NativeAction(combo.Key) is string action)
                 {
-                    found = new Conflict($"{OS.GetKeycodeString(combo.Key)} is the game's '{action}' hotkey, which takes precedence", Blocking: false);
+                    found = new Conflict($"{OS.GetKeycodeString(combo.Key)} is used by the game", Blocking: false);
                 }
                 if (found != null) conflicts[(t, s)] = found.Value;
             }

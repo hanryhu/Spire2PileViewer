@@ -163,15 +163,22 @@ public static class Settings
         }
     }
 
-    public static void ResetPositions()
+    public static void ResetStripPositions()
     {
         _offsets.Clear();
-        HideButtonOffset = Vector2.Zero;
         Save();
-        ModLog.Info("Settings: strip and Hide hand button positions reset");
+        ModLog.Info("Settings: strip positions reset");
     }
 
-    public static void ResetAll()
+    public static void ResetHideButtonPosition()
+    {
+        HideButtonOffset = Vector2.Zero;
+        Save();
+        ModLog.Info("Settings: Hide hand button position reset");
+    }
+
+    /// <summary>Pile Viewer tab defaults: strips, their positions and the pile hotkeys.</summary>
+    public static void ResetPileViewer()
     {
         Enabled = true;
         Scale = 1f;
@@ -179,14 +186,28 @@ public static class Settings
         ShowSelf = false;
         TextList = false;
         _offsets.Clear();
-        Hotkeys.Deserialize(null);
+        Hotkeys.ResetDefaults(hand: false);
+        Save();
+        ModLog.Info("Settings: Pile Viewer reset to defaults");
+    }
+
+    /// <summary>Hand Viewer tab defaults: its toggles, sliders, button position and hand hotkeys.</summary>
+    public static void ResetHandViewer()
+    {
         HandViewerEnabled = true;
         HideHandButtonEnabled = true;
         HandShadow = 0.5f;
         HandVisible = 0.25f;
         HandShadowWhenHidden = 0.15f;
         HideButtonOffset = Vector2.Zero;
+        Hotkeys.ResetDefaults(hand: true);
         Save();
-        ModLog.Info("Settings: all reset to defaults");
+        ModLog.Info("Settings: Hand Viewer reset to defaults");
+    }
+
+    public static void ResetAll()
+    {
+        ResetPileViewer();
+        ResetHandViewer();
     }
 }

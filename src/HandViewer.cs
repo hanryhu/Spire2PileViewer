@@ -12,6 +12,7 @@ using MegaCrit.Sts2.Core.Nodes.Cards.Holders;
 using MegaCrit.Sts2.Core.Nodes.Combat;
 using MegaCrit.Sts2.Core.Nodes.Rooms;
 using MegaCrit.Sts2.Core.Nodes.Screens.Capstones;
+using MegaCrit.Sts2.Core.Runs;
 
 namespace Spire2PileViewer;
 
@@ -25,20 +26,37 @@ public static class HandViewer
     /// <summary>NetId of the teammate whose hand is shown, or null.</summary>
     public static ulong? ViewedNetId { get; private set; }
 
-    /// <summary>Your own hand is hidden (drawn as an outline) so the teammate's hand is easier to see.</summary>
+    /// <summary>
+    /// The player picked a hand (or closed it) this run. Until then the lowest-numbered teammate's hand is shown.
+    /// The choice carries over between fights and is forgotten on returning to the main menu.
+    /// </summary>
+    private static bool _viewChosen;
+
+    /// <summary>Your own hand is hidden so the teammate's hand is easier to see. Reset at the start of each fight.</summary>
     public static bool HideOwnHand { get; private set; }
 
     private static Button? _hideButton;
 
     private static StyleBoxFlat? _hideButtonStyle;
 
-    /// <summary>Strip "Hand" slot: show this teammate's hand, or hide it if it's already shown. One at a time.</summary>
+    /// <summary>
+    /// Strip "Hand" slot: show this teammate's hand, or hide it if it's already shown (one at a time). On your own
+    /// strip it hides/shows your own hand instead, like the Hide hand button.
+    /// </summary>
     public static void Toggle(Player player)
     {
         if (!Settings.HandViewerEnabled) return;
+        if (player.NetId == LocalNetId)
+        {
+            ToggleHideOwnHand();
+            return;
+        }
         ViewedNetId = ViewedNetId == player.NetId ? null : player.NetId;
+        _viewChosen = true;
         ModLog.Info($"HandViewer: viewing {(ViewedNetId?.ToString() ?? "nobody")}");
     }
+
+    private static ulong LocalNetId => RunManager.Instance?.NetService?.NetId ?? 0;
 
     /// <summary>Hotkey: toggle teammate #index's hand view (0-based among PileViewer.Teammates()).</summary>
     internal static bool ToggleTeammate(int teammateIndex)
@@ -65,11 +83,13 @@ public static class HandViewer
         ModLog.Info($"HandViewer: hide own hand = {HideOwnHand}");
     }
 
-    /// <summary>Combat over / leaving: drop all view state and the button.</summary>
+    /// <summary>
+    /// Combat over: drop the cards, the button and "hide my hand" (so every fight starts with your hand shown).
+    /// Whose hand is shown carries over to the next fight.
+    /// </summary>
     public static void Reset()
     {
         if (HideOwnHand) ApplyHiddenLook(false);
-        ViewedNetId = null;
         HideOwnHand = false;
         if (_hideButton != null && GodotObject.IsInstanceValid(_hideButton)) _hideButton.QueueFree();
         _hideButton = null;
@@ -79,16 +99,33 @@ public static class HandViewer
         _cardLayer = null;
     }
 
-    /// <summary>Show this teammate's hand (auto-test helper; same as clicking their eye when nothing is shown).</summary>
-    internal static void View(ulong netId) => ViewedNetId = netId;
+    /// <summary>Back at the main menu: forget whose hand was shown, so the next run starts with the default again.</summary>
+    public static void ResetRun()
+    {
+        Reset();
+        ViewedNetId = null;
+        _viewChosen = false;
+    }
+
+    /// <summary>Show this teammate's hand, or nobody's (auto-test helper; same as clicking their eye).</summary>
+    internal static void View(ulong? netId)
+    {
+        ViewedNetId = netId;
+        _viewChosen = true;
+    }
 
     /// <summary>Per-frame update while in combat (called by PileViewer).</summary>
     internal static void Update(NCombatRoom room, Func<ulong, Player?> findPlayer)
     {
         if (!Settings.HandViewerEnabled)
         {
-            if (ViewedNetId != null || HideOwnHand || _hideButton != null) Reset();
+            if (_cardLayer != null || HideOwnHand || _hideButton != null) Reset();
             return;
+        }
+        if (!_viewChosen && ViewedNetId == null && PileViewer.Teammates().FirstOrDefault().player is Player first)
+        {
+            ViewedNetId = first.NetId; // default: the lowest-numbered teammate
+            ModLog.Info($"HandViewer: viewing {first.NetId} (default)");
         }
         Player? viewed = ViewedNetId is ulong id ? findPlayer(id) : null;
         if (ViewedNetId != null && viewed == null) ViewedNetId = null; // teammate left / not in this combat
@@ -189,7 +226,7 @@ public static class HandViewer
             FocusMode = Control.FocusModeEnum.None,
             ZIndex = 100,
             CustomMinimumSize = new Vector2(120f, 30f),
-            TooltipText = "Hide your own hand to see your teammate's hand behind it.\nDrag to move (reset in the F1 menu).",
+            TooltipText = "Drag to move",
         };
         _hideButtonStyle = new StyleBoxFlat
         {
@@ -252,6 +289,14 @@ public static class HandViewer
 
     /// <summary>Teammate card under the mouse (native closeup), or null.</summary>
     private static NHandCardHolder? _focused;
+
+    /// <summary>Where the closeup's bottom edge sits (layer units), fixed when the hover starts.</summary>
+    private static float? _focusBottom;
+
+    private static double _nextBubble;
+
+    /// <summary>Mouse position (viewport units) from the last mouse event the game received.</summary>
+    internal static Vector2 LastMouse;
 
     // hv10: glow last applied to each shown holder (null = no glow), so the highlight only animates on change.
     private static readonly Dictionary<NHandCardHolder, Color?> _glow = new();
@@ -316,8 +361,14 @@ public static class HandViewer
             holder.Position = HandPosHelper.GetPosition(cards.Count, index) - new Vector2(0f, RaiseFor(cards.Count));
             holder.SetScaleInstantly(HandPosHelper.GetScale(cards.Count));
             holder.SetAngleInstantly(HandPosHelper.GetAngle(cards.Count, index));
-            holder.HolderFocused += h => { _focused = h; ModLog.Info($"HandViewer: closeup {h.CardNode?.Model?.Id.Entry}"); };
+            holder.HolderFocused += h =>
+            {
+                _focused = h;
+                _focusBottom = null;
+                ModLog.Info($"HandViewer: closeup {h.CardNode?.Model?.Id.Entry}");
+            };
             holder.HolderUnfocused += h => { if (_focused == h) _focused = null; };
+            holder.HolderMouseClicked += _ => OnTeammateCardPressed();
             _shown.Add((card, holder));
         }
 
@@ -342,7 +393,25 @@ public static class HandViewer
             }
             if (i == focusIndex)
             {
-                position.Y = -holder.Hitbox.Size.Y * 0.5f + 2f;
+                // Full size and upright. With your hand hidden: the native closeup. Otherwise lifted so the whole
+                // card shows above your hand instead of covering it — its bottom edge where your hand starts, but
+                // never above the mouse (an edge card hovered low, where your hand doesn't reach, stays under it).
+                float height = holder.Hitbox.Size.Y;
+                if (HideOwnHand)
+                {
+                    position.Y = -height * 0.5f + 2f;
+                }
+                else
+                {
+                    float handTop = HandPosHelper.GetPosition(cards.Count, i).Y - height * 0.5f * HandPosHelper.GetScale(cards.Count).Y;
+                    if (NPlayerHand.Instance is NPlayerHand own && own.ActiveHolders.Count > 0)
+                    {
+                        handTop = Mathf.Min(handTop, own.ActiveHolders.Min(h => h.Position.Y - h.Hitbox.Size.Y * 0.5f * h.Scale.Y));
+                    }
+                    handTop -= 20f; // clear the cost badges, which stick out above your cards
+                    _focusBottom ??= Mathf.Max(handTop, (_cardLayer.GetGlobalTransformWithCanvas().AffineInverse() * LastMouse).Y + 4f);
+                    position.Y = _focusBottom.Value - height * 0.5f;
+                }
                 holder.SetAngleInstantly(0f);
                 holder.SetScaleInstantly(Vector2.One);
                 holder.Position = new Vector2(holder.Position.X, position.Y);
@@ -376,6 +445,15 @@ public static class HandViewer
                 ApplyGlow(holder, node, TeammateGlow(model, viewed));
             }
         }
+    }
+
+    /// <summary>Pressing (starting to drag) a teammate's card: your character says you can't play it.</summary>
+    private static void OnTeammateCardPressed()
+    {
+        double now = Time.GetTicksMsec() / 1000.0;
+        if (now < _nextBubble) return;
+        _nextBubble = now + 2.0;
+        PileViewer.Say("I can only play cards from my own hand.");
     }
 
     /// <summary>
@@ -489,6 +567,15 @@ public static class HandViewer
     internal static Vector2? CardCenter(int index) =>
         index < _shown.Count && GodotObject.IsInstanceValid(_shown[index].Holder)
             ? _shown[index].Holder.Hitbox.GetGlobalRect().GetCenter() : null;
+
+    /// <summary>Closeup vs your hand: its bottom edge, your hand's top edge, whether the mouse is on it (auto-test).</summary>
+    internal static string DescribeCloseup()
+    {
+        if (_focused == null || !GodotObject.IsInstanceValid(_focused)) return "no closeup";
+        Rect2 rect = _focused.Hitbox.GetGlobalRect();
+        float ownTop = NPlayerHand.Instance?.ActiveHolders.Select(h => h.Hitbox.GetGlobalRect().Position.Y).DefaultIfEmpty(float.NaN).Min() ?? float.NaN;
+        return $"closeup top={rect.Position.Y:0} bottom={rect.End.Y:0} ownHandTop={ownTop:0} mouseOnIt={rect.HasPoint(LastMouse)} modulate={_focused.Modulate.R:0.##}";
+    }
 
     /// <summary>The closeup card, if any (auto-test).</summary>
     internal static string DescribeFocus() => _focused != null && GodotObject.IsInstanceValid(_focused)

@@ -8,6 +8,7 @@ using MegaCrit.Sts2.Core.Saves;
 using MegaCrit.Sts2.Core.Nodes.Cards.Holders;
 using MegaCrit.Sts2.Core.Nodes.Combat;
 using MegaCrit.Sts2.Core.Nodes.Rooms;
+using MegaCrit.Sts2.Core.Nodes.Screens.Capstones;
 using MegaCrit.Sts2.Core.Nodes.CommonUi;
 using System.Collections.Generic;
 using System.Linq;
@@ -107,19 +108,17 @@ public static class AutoTest
         PileViewer.OpenTeammatePile(0, PileType.Discard); // close it
         await Wait(1.0);
 
-        // Hand Viewer: the teammate's hand behind yours, then your hand hidden with one of their cards in closeup.
-        HandViewer.ToggleTeammate(0);
+        // Hand Viewer: the teammate's hand behind yours with one card raised, then your hand hidden with a closeup.
+        HandViewer.View(PileViewer.Teammates()[0].player.NetId);
         await Wait(2.0);
-        Log("SHOT 4 " + HandViewer.DescribeCards());
+        if (HandViewer.CardCenter(1) is Vector2 peek) await Mouse(peek - new Vector2(0f, 140f), pressed: null);
+        await Wait(1.5);
+        Log("SHOT 4 " + HandViewer.DescribeCloseup());
         await Wait(6.0);
+        await Mouse(new Vector2(960f, 300f), pressed: null);
         HandViewer.ToggleHideOwnHand();
         await Wait(1.0);
-        if (HandViewer.CardCenter(2) is Vector2 target)
-        {
-            var tree = (SceneTree)Engine.GetMainLoop();
-            Vector2 point = new Vector2(target.X, target.Y - 120f) * ((Vector2)DisplayServer.WindowGetSize() / tree.Root.GetVisibleRect().Size);
-            Input.ParseInputEvent(new InputEventMouseMotion { Position = point, GlobalPosition = point });
-        }
+        if (HandViewer.CardCenter(2) is Vector2 target) await Mouse(target - new Vector2(0f, 120f), pressed: null);
         await Wait(1.5);
         Log("SHOT 5 " + HandViewer.DescribeFocus());
         await Wait(6.0);
@@ -430,6 +429,8 @@ public static class AutoTest
         for (int i = 0; i < 120 && !CombatManager.Instance.IsInProgress; i++) await Wait(0.25);
         Log($"hands: combat in progress: {CombatManager.Instance.IsInProgress} (mutator={mutator}, observer={observer})");
         await Wait(3.0);
+        Log($"polish: default view at combat start = {HandViewer.ViewedNetId?.ToString() ?? "nobody"} (lowest teammate = {PileViewer.Teammates().FirstOrDefault().player?.NetId})");
+        HandViewer.View(null); // the older phases start from "nobody shown"
 
         NPlayerHand? hand = NPlayerHand.Instance;
         if (hand == null)
@@ -492,6 +493,88 @@ public static class AutoTest
         await ExerciseThirdPlayer(observer);
         if (observer) await ExerciseHandHotkeys();
         await ExerciseGlow(mutator, observer);
+        if (observer) await ExercisePolish();
+    }
+
+    /// <summary>
+    /// Polish PR: hand without strips, own strip eye = Hide hand, plain strip drag, lifted closeup, the "own hand"
+    /// bubble, and whose hand is shown carrying over to the next fight (with Hide hand reset).
+    /// </summary>
+    private static async Task ExercisePolish()
+    {
+        await Wait(2.0);
+        ulong me = RunManager.Instance.NetService.NetId;
+        HandViewer.View(1000);
+        if (HandViewer.HideOwnHand) HandViewer.ToggleHideOwnHand();
+
+        Settings.Enabled = false;
+        await Wait(1.0);
+        Log($"polish: strips off → strips: {PileViewer.DescribeState()} | hand: {HandViewer.DescribeCards()}");
+        Settings.Enabled = true;
+        Settings.ShowSelf = true;
+        await Wait(1.0);
+        PileViewer.SimulatePress(PileViewer.StripIndexOf(me), PileType.Hand);
+        await Wait(0.5);
+        Log($"polish: own eye → hideOwnHand={HandViewer.HideOwnHand} viewing={HandViewer.ViewedNetId}");
+        PileViewer.SimulatePress(PileViewer.StripIndexOf(me), PileType.Hand);
+        await Wait(0.5);
+        Log($"polish: own eye again → hideOwnHand={HandViewer.HideOwnHand} viewing={HandViewer.ViewedNetId}");
+        Settings.ShowSelf = false;
+        await Wait(1.0);
+
+        // Plain drag on a slot moves the strip and doesn't open the pile; a click still opens it.
+        if (PileViewer.SlotRect(1000, PileType.Discard) is Rect2 slot)
+        {
+            Vector2 start = slot.GetCenter();
+            await Mouse(start, pressed: true);
+            await Mouse(start + new Vector2(30f, -20f), pressed: null);
+            await Mouse(start + new Vector2(60f, -40f), pressed: null);
+            await Mouse(start + new Vector2(60f, -40f), pressed: false);
+            await Wait(0.8);
+            Log($"polish: after plain drag: offset={Settings.GetOffset(1000)} pileScreenOpen={NCapstoneContainer.Instance?.InUse}");
+            Vector2 now = PileViewer.SlotRect(1000, PileType.Discard)!.Value.GetCenter();
+            await Mouse(now, pressed: true);
+            await Mouse(now, pressed: false);
+            await Wait(1.0);
+            Log($"polish: after click: pileScreenOpen={NCapstoneContainer.Instance?.InUse} {PileViewer.DescribeOpenView()}");
+            PileViewer.OpenTeammatePile(0, PileType.Discard); // close
+            await Wait(1.0);
+            Settings.ResetStripPositions();
+        }
+
+        // Closeup: hover the visible top of a teammate card; it should rise fully above your hand.
+        await Wait(1.0);
+        if (HandViewer.CardCenter(0) is Vector2 card)
+        {
+            Vector2 point = card - new Vector2(0f, 120f);
+            await Mouse(point, pressed: null);
+            await Wait(1.2);
+            Log($"polish: closeup {HandViewer.DescribeFocus()} | {HandViewer.DescribeCloseup()}");
+            await Mouse(point, pressed: true);
+            await Mouse(point, pressed: false);
+            await Wait(0.5);
+            Log("polish: pressed a teammate card");
+            await Mouse(new Vector2(960f, 300f), pressed: null);
+            await Wait(0.8);
+        }
+
+        // Next fight: the shown hand carries over (here: nobody, chosen), Hide hand resets.
+        HandViewer.View(null);
+        if (!HandViewer.HideOwnHand) HandViewer.ToggleHideOwnHand();
+        Log($"polish: before win: viewing={HandViewer.ViewedNetId?.ToString() ?? "nobody"} hideOwnHand={HandViewer.HideOwnHand}");
+        Player player = LocalContext.GetMe(RunManager.Instance.DebugOnlyGetState()!)!;
+        RunManager.Instance.ActionQueueSynchronizer.RequestEnqueue(new ConsoleCmdGameAction(player, "win", inCombat: true));
+        await WaitUntil(() => !CombatManager.Instance.IsInProgress, 20);
+        await Wait(3.0);
+        Log($"polish: combat over: viewing={HandViewer.ViewedNetId?.ToString() ?? "nobody"} hideOwnHand={HandViewer.HideOwnHand}");
+        string fight = "fight " + PickEncounter().Id.Entry;
+        RunManager.Instance.ActionQueueSynchronizer.RequestEnqueue(new ConsoleCmdGameAction(player, fight, inCombat: false));
+        await WaitUntil(() => CombatManager.Instance.IsInProgress, 30);
+        await Wait(3.0);
+        Log($"polish: next fight ({CombatManager.Instance.IsInProgress}): viewing={HandViewer.ViewedNetId?.ToString() ?? "nobody"} hideOwnHand={HandViewer.HideOwnHand} cards={HandViewer.DescribeCards()}");
+        HandViewer.View(1000);
+        await Wait(3.0);
+        Log($"polish: next fight, view 1000: {HandViewer.DescribeCards()}");
     }
 
     /// <summary>
@@ -563,7 +646,7 @@ public static class AutoTest
         int handSlot = Array.IndexOf(Hotkeys.Slots, PileType.Hand);
         Log($"hv9: defaults: teammate1 Hand={Hotkeys.Active[0, handSlot]?.ToString() ?? "unbound"} hideHand={Hotkeys.Active[Hotkeys.GlobalRow, 0]?.ToString() ?? "unbound"}");
         if (HandViewer.HideOwnHand) HandViewer.ToggleHideOwnHand();
-        HandViewer.Reset();
+        HandViewer.View(null);
         await Wait(0.5);
 
         SettingsMenu.Open();
@@ -635,7 +718,7 @@ public static class AutoTest
             await Mouse(now, pressed: false);
             Log("hv7: after click: " + HandViewer.DescribeState());
             SettingsMenu.Open();
-            SettingsMenu.ResetPositionButton!.EmitSignal(BaseButton.SignalName.Pressed);
+            SettingsMenu.ResetHideButtonPositionButton!.EmitSignal(BaseButton.SignalName.Pressed);
             SettingsMenu.Close();
             await Wait(0.5);
             Log($"hv7: after F1 reset: offset={Settings.HideButtonOffset} {HandViewer.DescribeState()}");
