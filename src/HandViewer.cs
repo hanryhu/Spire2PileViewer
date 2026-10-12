@@ -173,6 +173,9 @@ public static class HandViewer
 
     private static ulong? _shownFor;
 
+    /// <summary>Teammate card under the mouse (native closeup), or null.</summary>
+    private static NHandCardHolder? _focused;
+
     private static double _nextVisualRefresh;
 
     /// <summary>How far (container units) the teammate's cards sit above yours: "% of card visible" of a card.</summary>
@@ -232,19 +235,51 @@ public static class HandViewer
             holder.Position = HandPosHelper.GetPosition(cards.Count, index) - new Vector2(0f, RaiseFor(cards.Count));
             holder.SetScaleInstantly(HandPosHelper.GetScale(cards.Count));
             holder.SetAngleInstantly(HandPosHelper.GetAngle(cards.Count, index));
+            holder.HolderFocused += h => { _focused = h; ModLog.Info($"HandViewer: closeup {h.CardNode?.Model?.Id.Entry}"); };
+            holder.HolderUnfocused += h => { if (_focused == h) _focused = null; };
             _shown.Add((card, holder));
         }
 
         // Native fan layout for the teammate's hand size, raised so only "% of card visible" peeks out above yours.
+        // A hovered card gets the native closeup (NPlayerHand.RefreshLayout): upright, full size, lifted so the
+        // whole card shows, drawn above your hand (the holder sets ZIndex 1 on hover), neighbours slide aside.
         float raise = RaiseFor(cards.Count);
+        if (_focused != null && !GodotObject.IsInstanceValid(_focused)) _focused = null;
+        int focusIndex = _focused == null ? -1 : _shown.FindIndex(s => s.Holder == _focused) is int f && f >= 0
+            ? cards.ToList().IndexOf(_shown[f].Model) : -1;
         for (int i = 0; i < cards.Count; i++)
         {
             var entry = _shown.FirstOrDefault(s => s.Model == cards[i]);
             if (entry.Holder == null || !GodotObject.IsInstanceValid(entry.Holder)) continue;
-            _cardLayer.MoveChild(entry.Holder, i);
-            entry.Holder.SetTargetPosition(HandPosHelper.GetPosition(cards.Count, i) - new Vector2(0f, raise));
-            entry.Holder.SetTargetAngle(HandPosHelper.GetAngle(cards.Count, i));
-            entry.Holder.SetTargetScale(HandPosHelper.GetScale(cards.Count));
+            NHandCardHolder holder = entry.Holder;
+            _cardLayer.MoveChild(holder, i);
+            Vector2 position = HandPosHelper.GetPosition(cards.Count, i) - new Vector2(0f, raise);
+            if (focusIndex > -1 && i != focusIndex)
+            {
+                float push = Mathf.Lerp(100f, 0f, Mathf.Min(1f, Mathf.Abs(focusIndex - i) / 4f));
+                position += Vector2.Left * Mathf.Sign(focusIndex - i) * push;
+            }
+            if (i == focusIndex)
+            {
+                position.Y = -holder.Hitbox.Size.Y * 0.5f + 2f;
+                holder.SetAngleInstantly(0f);
+                holder.SetScaleInstantly(Vector2.One);
+                holder.Position = new Vector2(holder.Position.X, position.Y);
+                holder.SetTargetPosition(position);
+            }
+            else
+            {
+                holder.SetTargetPosition(position);
+                holder.SetTargetAngle(HandPosHelper.GetAngle(cards.Count, i));
+                holder.SetTargetScale(HandPosHelper.GetScale(cards.Count));
+            }
+        }
+        // The closeup is shown at full brightness; the rest keep the shadow tint.
+        foreach (var (_, holder) in _shown)
+        {
+            if (!GodotObject.IsInstanceValid(holder)) continue;
+            Color target = holder == _focused ? new Color(1f / shade, 1f / shade, 1f / shade) : Colors.White;
+            if (holder.Modulate != target) holder.Modulate = target;
         }
 
         // The game only refreshes card nodes it can find (NCard.FindOnTable), which excludes ours — refresh
@@ -268,6 +303,7 @@ public static class HandViewer
         }
         _shown.Clear();
         _shownFor = null;
+        _focused = null;
     }
 
     /// <summary>Lift your own Hand Card Count numbers by <paramref name="raise"/> so they clear the teammate's cards.</summary>
@@ -280,6 +316,16 @@ public static class HandViewer
             if (Math.Abs(label.Position.Y - y) > 0.5f) label.Position = new Vector2(label.Position.X, y);
         }
     }
+
+    /// <summary>Global center of teammate card #index, e.g. to point the mouse at it (auto-test).</summary>
+    internal static Vector2? CardCenter(int index) =>
+        index < _shown.Count && GodotObject.IsInstanceValid(_shown[index].Holder)
+            ? _shown[index].Holder.Hitbox.GetGlobalRect().GetCenter() : null;
+
+    /// <summary>The closeup card, if any (auto-test).</summary>
+    internal static string DescribeFocus() => _focused != null && GodotObject.IsInstanceValid(_focused)
+        ? $"{_focused.CardNode?.Model?.Id.Entry} scale={_focused.Scale.X:0.##} rot={_focused.RotationDegrees:0.#} pos=({_focused.Position.X:0},{_focused.Position.Y:0}) z={_focused.ZIndex}"
+        : "none";
 
     /// <summary>Teammate cards currently drawn (auto-test).</summary>
     internal static string DescribeCards() => _cardLayer == null || !GodotObject.IsInstanceValid(_cardLayer)

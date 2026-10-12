@@ -459,6 +459,28 @@ public static class AutoTest
             Log("hv3: mutator's own hand: " + HandViewer.DescribeHand(me));
         }
         await watch;
+        if (observer) await ExerciseCloseups();
+    }
+
+    /// <summary>hv5: point the mouse at teammate cards (through the real input pipeline) and check the native closeup.</summary>
+    private static async Task ExerciseCloseups()
+    {
+        await Wait(1.0);
+        foreach (int index in new[] { 3, 0, 5 })
+        {
+            if (HandViewer.CardCenter(index) is not Vector2 target) continue;
+            // Viewport (1920x1080 design) → window pixels.
+            var tree = (SceneTree)Engine.GetMainLoop();
+            Viewport vp = tree.Root;
+            Vector2 window = (Vector2)DisplayServer.WindowGetSize();
+            Vector2 factor = window / vp.GetVisibleRect().Size;
+            // Aim at the visible top strip of the card (the rest is behind your own hand).
+            Vector2 point = new Vector2(target.X, target.Y - 120f) * factor;
+            Input.ParseInputEvent(new InputEventMouseMotion { Position = point, GlobalPosition = point });
+            await Wait(0.8);
+            Log($"hv5: hover card #{index} → closeup {HandViewer.DescribeFocus()}");
+        }
+        Log("hv5: " + HandViewer.DescribeCards());
     }
 
     private static async Task WatchHand(int seconds)
