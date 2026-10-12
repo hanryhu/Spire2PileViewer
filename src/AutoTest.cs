@@ -65,6 +65,9 @@ public static class AutoTest
                 PileViewer.SimulatePress(pile);
                 await Wait(1.0);
             }
+            PileViewer.SimulatePress(PileType.Draw); // leave the draw-pile popup open for the screenshot
+            await Wait(1.0);
+            Log("state: " + PileViewer.DescribeState());
             Log("done — screenshot window now");
         }
         catch (Exception ex)

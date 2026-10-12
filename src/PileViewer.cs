@@ -5,6 +5,7 @@ using Godot;
 using MegaCrit.Sts2.Core.Combat;
 using MegaCrit.Sts2.Core.Entities.Cards;
 using MegaCrit.Sts2.Core.Entities.Players;
+using MegaCrit.Sts2.Core.Models;
 using MegaCrit.Sts2.Core.Nodes.Combat;
 using MegaCrit.Sts2.Core.Nodes.Rooms;
 using MegaCrit.Sts2.Core.Runs;
@@ -34,6 +35,24 @@ public static class PileViewer
         public required Player Player;
         public required PanelContainer Root;
         public readonly Label[] Counts = new Label[SlotPiles.Length];
+
+        // Text popup listing one pile's cards (milestone 2); null when closed.
+        public PanelContainer? Popup;
+        public Label? PopupLabel;
+        public PileType PopupPile;
+
+        public void ClosePopup()
+        {
+            if (Popup != null && GodotObject.IsInstanceValid(Popup)) Popup.QueueFree();
+            Popup = null;
+            PopupLabel = null;
+        }
+
+        public void Free()
+        {
+            ClosePopup();
+            if (GodotObject.IsInstanceValid(Root)) Root.QueueFree();
+        }
     }
 
     private static readonly Dictionary<ulong, Widget> _widgets = new();
@@ -57,10 +76,7 @@ public static class PileViewer
 
     public static void Hide()
     {
-        foreach (var widget in _widgets.Values)
-        {
-            if (GodotObject.IsInstanceValid(widget.Root)) widget.Root.QueueFree();
-        }
+        foreach (var widget in _widgets.Values) widget.Free();
         _widgets.Clear();
     }
 
@@ -93,7 +109,7 @@ public static class PileViewer
 
         foreach (var stale in _widgets.Keys.Where(id => players.All(p => p.NetId != id)).ToList())
         {
-            if (GodotObject.IsInstanceValid(_widgets[stale].Root)) _widgets[stale].Root.QueueFree();
+            _widgets[stale].Free();
             _widgets.Remove(stale);
         }
 
@@ -114,6 +130,7 @@ public static class PileViewer
         if (creatureNode == null || widget.Player.PlayerCombatState == null)
         {
             widget.Root.Visible = false;
+            widget.ClosePopup();
             return;
         }
         widget.Root.Visible = true;
@@ -126,6 +143,30 @@ public static class PileViewer
 
         Vector2 size = widget.Root.Size;
         widget.Root.GlobalPosition = creatureNode.GlobalPosition + AnchorOffset - new Vector2(size.X / 2f, size.Y);
+
+        if (widget.Popup != null && widget.PopupLabel != null && GodotObject.IsInstanceValid(widget.Popup))
+        {
+            string text = DescribePile(widget.Player, widget.PopupPile);
+            if (widget.PopupLabel.Text != text) widget.PopupLabel.Text = text;
+            Vector2 popupSize = widget.Popup.Size;
+            widget.Popup.GlobalPosition = widget.Root.GlobalPosition + new Vector2((size.X - popupSize.X) / 2f, -popupSize.Y - 6f);
+        }
+    }
+
+    /// <summary>
+    /// "Ironclad — Draw pile (5)" followed by one line per distinct card ("3× Strike"), sorted by name
+    /// so the draw order is not revealed (the native draw-pile screen also sorts).
+    /// </summary>
+    internal static string DescribePile(Player player, PileType pileType)
+    {
+        if (player.PlayerCombatState == null) return PileName(pileType) + ": not in combat";
+        IReadOnlyList<CardModel> cards = pileType.GetPile(player).Cards;
+        string header = $"{player.Character.Title.GetFormattedText()} — {PileName(pileType)} ({cards.Count})";
+        if (cards.Count == 0) return header + "\n(empty)";
+        var lines = cards.GroupBy(c => c.Title)
+            .OrderBy(g => g.Key, StringComparer.CurrentCultureIgnoreCase)
+            .Select(g => g.Count() > 1 ? $"{g.Count()}× {g.Key}" : g.Key);
+        return header + "\n" + string.Join("\n", lines);
     }
 
     private static Widget CreateWidget(NCombatRoom room, Player player)
@@ -153,7 +194,7 @@ public static class PileViewer
         var widget = new Widget { Player = player, Root = root };
         for (int i = 0; i < SlotPiles.Length; i++)
         {
-            row.AddChild(CreateSlot(room, player, SlotPiles[i], out widget.Counts[i]));
+            row.AddChild(CreateSlot(room, widget, SlotPiles[i], out widget.Counts[i]));
         }
 
         room.AddChild(root);
@@ -161,7 +202,7 @@ public static class PileViewer
         return widget;
     }
 
-    private static Button CreateSlot(NCombatRoom room, Player player, PileType pileType, out Label count)
+    private static Button CreateSlot(NCombatRoom room, Widget widget, PileType pileType, out Label count)
     {
         var button = new Button
         {
@@ -217,7 +258,7 @@ public static class PileViewer
         badge.AddChild(count);
         count.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);
 
-        button.Pressed += () => OnSlotPressed(player, pileType);
+        button.Pressed += () => OnSlotPressed(widget, pileType);
         return button;
     }
 
@@ -239,13 +280,38 @@ public static class PileViewer
             ModLog.Info("PileViewer: SimulatePress with no strips");
             return;
         }
-        OnSlotPressed(widget.Player, pileType);
+        OnSlotPressed(widget, pileType);
     }
 
-    private static void OnSlotPressed(Player player, PileType pileType)
+    private static void OnSlotPressed(Widget widget, PileType pileType)
     {
-        int cards = player.PlayerCombatState != null ? pileType.GetPile(player).Cards.Count : -1;
-        ModLog.Info($"PileViewer: clicked {pileType} for player {player.NetId} ({cards} cards)");
+        string text = DescribePile(widget.Player, pileType);
+        ModLog.Info($"PileViewer: clicked {pileType} for player {widget.Player.NetId}: " + text.Replace('\n', '|'));
+
+        bool sameOpen = widget.Popup != null && GodotObject.IsInstanceValid(widget.Popup) && widget.PopupPile == pileType;
+        widget.ClosePopup();
+        if (sameOpen) return;
+
+        var popup = new PanelContainer { ZIndex = 101, MouseFilter = Control.MouseFilterEnum.Ignore };
+        var style = new StyleBoxFlat
+        {
+            BgColor = new Color(0.08f, 0.08f, 0.12f, 0.92f),
+            BorderColor = new Color(0.8f, 0.6f, 0.2f, 0.9f),
+        };
+        style.SetBorderWidthAll(1);
+        style.SetCornerRadiusAll(6);
+        style.SetContentMarginAll(8);
+        popup.AddThemeStyleboxOverride("panel", style);
+
+        var label = new Label { Text = text, MouseFilter = Control.MouseFilterEnum.Ignore };
+        label.AddThemeFontSizeOverride("font_size", 14);
+        label.AddThemeColorOverride("font_color", new Color(0.92f, 0.92f, 0.92f));
+        popup.AddChild(label);
+
+        widget.Root.GetParent().AddChild(popup);
+        widget.Popup = popup;
+        widget.PopupLabel = label;
+        widget.PopupPile = pileType;
     }
 
     private const string BadgeTexturePath = "res://images/packed/combat_ui/pile_button_count.png";

@@ -7,7 +7,7 @@ Living notes so work can resume after an interruption. Newest status first.
 | Milestone | Scope | State | Tag |
 |---|---|---|---|
 | 1 | Buttons UI: 3-slot strip (draw / exhaust / discard) above each teammate, native icons + count badges | done | `m1` |
-| 2 | Load correct info: clicking a slot shows that teammate's pile contents (text) | — | `m2` |
+| 2 | Load correct info: clicking a slot toggles a text popup above the strip listing that pile (grouped, name-sorted, live-updating) | done | `m2` |
 | 3 | Real UI: open the native `NCardPileScreen` for the teammate's pile; polish; feature-complete for 2 players | — | `m3` |
 | 4 | Convenience: draggable strip (persisted offset), settings | — | `m4` |
 | 5 | Hotkeys + 3–4 players | — | `m5` |
