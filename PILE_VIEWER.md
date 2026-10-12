@@ -12,6 +12,7 @@ Living notes so work can resume after an interruption. Newest status first.
 | 4 | Shift+drag moves all strips (saved offset); F1 settings menu (on/off, size 50–200%, background opacity, show over self, text-list mode, reset position, reset all); native-style count bump; verified live count updates over the network | done | `m4` |
 | 5 | Configurable hotkeys: F1 menu dropdown of the actual teammates (P-number + character), click a binding then press a combo (Esc cancels, Backspace clears), conflicts shown in red and block saving; defaults Shift/Ctrl/Ctrl+Shift + Z/V/C per teammate. Verified with 3 players | done | `m5` |
 | 6 | Revisions: hotkeys rank below the game (run after `NHotkeyManager._UnhandledInput`, skip keys the game maps, console open, or text editing); count badges copied per pile from the native buttons (exhaust = centered purple number); toggle renamed "Show teammates' piles"; conflicts with teammate slots not in this game are warnings (saved; lowest teammate wins); pile-screen captions name the teammate ("…into The Ironclad's draw pile…", "…start of The Ironclad's turn", "…exhausted by The Ironclad…"; English only); README screenshots via `scripts/dev-showcase.ps1` | done | `m6` |
+| 7 | Fix: a key moved off the game's mouse+keyboard map still blocked our hotkey because the keyboard-only map was also checked; now only the active map counts (per `NControllerManager.InputType`, like the game) | done | `m7` |
 
 Each milestone is one or more commits ending in an annotated tag `mN`, so testing can roll back with
 `git checkout mN` and rebuild.
@@ -88,6 +89,12 @@ client logs SHOT 1/2/3 — disable BetterSpire2 in settings.save mod_list first 
   teammate 1 / 2 draw piles; rebinding into a conflict is refused (status red, active binding unchanged) and
   resolving it saves; keys injected with `Input.ParseInputEvent` (real input pipeline) work the same.
 
+- Manual test case (user, m6): **The Ball** — after it's played it goes into the draw pile at a random position
+  instead of the discard pile; the strip's counts followed correctly.
+- m7 regression: AutoTest moves the game's D action to P in the in-memory `_mKbInputMap` (not
+  `ModifyMKbKey`, which would save the player's keybindings), binds Shift+D, expects no warning and the
+  teammate's draw pile to open, then restores D.
+
 ## Decisions (made autonomously; revisit if wrong)
 
 - Slot order is draw | exhaust | discard as specified (native layout has exhaust above discard).
@@ -106,7 +113,7 @@ client logs SHOT 1/2/3 — disable BetterSpire2 in settings.save mod_list first 
   F1, F3 (BetterSpire2 hand viewer), Esc. Unsaved conflicting edits are discarded when the menu closes.
 - Key capture (rebinding) and F1 use a Harmony prefix on `NGame._Input`. Pile hotkeys use a postfix on
   `NHotkeyManager._UnhandledInput` so they rank *below* the game: only unhandled keys, never while the dev
-  console is open or a text field is edited, never for a key in NInputManager's `_mKbInputMap`/`_fKbInputMap`
+  console is open or a text field is edited, never for a key in the game's *active* key map (`_fKbInputMap` in keyboard-only mode, else `_mKbInputMap`)
   (the game matches its hotkeys on the key alone, ignoring modifiers — Shift+S still fires S).
 - Conflicts: duplicates between two editable rows (teammates in this game) and reserved keys block saving;
   duplicates with absent-teammate rows and game-key overlaps are warnings (saved; lowest teammate wins).

@@ -1,4 +1,6 @@
 using System;
+using MegaCrit.Sts2.Core.Nodes.CommonUi;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using Godot;
@@ -327,6 +329,25 @@ public static class AutoTest
         await PressKey(Key.S, shift: true);
         Log($"hotkeys: Shift+S → {PileViewer.DescribeOpenView()} (game's own pile expected, not the teammate's)");
         if (PileViewer.DescribeOpenView() != "nothing open") await PressKey(Key.Escape);
+
+        // (b2) Regression (user report): move the game's D binding to another key (as the game's keybinding
+        // screen does) — D must then count as free: saved without a game-key warning, and it fires. D is still
+        // bound in the *inactive* keyboard-only map on this profile, which used to wrongly block it.
+        // Edits the in-memory map only (the game's ModifyMKbKey would also save the player's keybindings).
+        var mkb = (Dictionary<StringName, Key>)Traverse.Create(NInputManager.Instance!).Field("_mKbInputMap").GetValue();
+        var movedOffD = mkb.Where(kv => kv.Value == Key.D).Select(kv => kv.Key).ToList();
+        foreach (StringName action in movedOffD) mkb[action] = Key.P;
+        Log($"hotkeys: moved game actions off D → P: {string.Join(", ", movedOffD)}; native(D)={Hotkeys.NativeAction(Key.D) ?? "none"}");
+        SettingsMenu.Open();
+        SettingsMenu.GetHotkeyButton(0)!.EmitSignal(BaseButton.SignalName.Pressed);
+        await PressKey(Key.D, shift: true);
+        Log($"hotkeys: draw→Shift+D: status='{SettingsMenu.HotkeyStatus}' active draw={Hotkeys.Active[0, 0]}");
+        SettingsMenu.Close();
+        await PressKey(Key.D, shift: true);
+        Log($"hotkeys: Shift+D → {PileViewer.DescribeOpenView()}");
+        await PressKey(Key.D, shift: true);
+        foreach (StringName action in movedOffD) mkb[action] = Key.D;
+        Log($"hotkeys: restored game D binding; native(D)={Hotkeys.NativeAction(Key.D) ?? "none"}");
 
         // (c) Duplicate with a teammate slot that doesn't exist this game → saved with a warning; lowest teammate wins.
         SettingsMenu.Open();

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using Godot;
 using HarmonyLib;
+using MegaCrit.Sts2.Core.ControllerInput;
 using MegaCrit.Sts2.Core.Entities.Cards;
 using MegaCrit.Sts2.Core.Nodes.CommonUi;
 
@@ -145,16 +146,18 @@ public static class Hotkeys
     {
         try
         {
-            object? manager = NInputManager.Instance;
+            NInputManager? manager = NInputManager.Instance;
             if (manager == null) return null;
-            foreach (string field in new[] { "_mKbInputMap", "_fKbInputMap" })
+            // Only the map the game is using right now (same choice as NInputManager._UnhandledKeyInput):
+            // the keyboard-only map in keyboard-only mode, otherwise the mouse+keyboard map. Checking both
+            // made a key the player had moved off the mouse+keyboard map still count as taken.
+            bool keyboardOnly = manager.ControllerManager?.InputType == InputType.KeyboardOnlyMode;
+            string field = keyboardOnly ? "_fKbInputMap" : "_mKbInputMap";
+            if (Traverse.Create(manager).Field(field).GetValue() is Dictionary<StringName, Key> map)
             {
-                if (Traverse.Create(manager).Field(field).GetValue() is Dictionary<StringName, Key> map)
+                foreach (var (action, mapped) in map)
                 {
-                    foreach (var (action, mapped) in map)
-                    {
-                        if (mapped == key) return action.ToString();
-                    }
+                    if (mapped == key) return action.ToString();
                 }
             }
         }
