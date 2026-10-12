@@ -1,6 +1,7 @@
 using System;
 using System.Linq;
 using Godot;
+using MegaCrit.Sts2.Core.Entities.Cards;
 using HarmonyLib;
 using MegaCrit.Sts2.Core.Nodes;
 using MegaCrit.Sts2.Core.Nodes.CommonUi;
@@ -29,7 +30,10 @@ public static class SettingsMenu
     private static int _selectedTeammate;
     private static int _editableTeammates = Hotkeys.MaxTeammates;
     private static int? _capturingSlot;
-    private static readonly Button?[] _hotkeyButtons = new Button?[3];
+    private static readonly Button?[] _hotkeyButtons = new Button?[Hotkeys.Slots.Length];
+    private static Button? _hideHandHotkeyButton;
+    private static Label? _hideHandHotkeyStatus;
+    private const int HideHandCapture = -1; // _capturingSlot value while capturing the Hide/show my hand binding
     private static Label? _hotkeyStatus;
 
     // Exposed for the auto-test, which drives the menu through its real controls.
@@ -49,6 +53,8 @@ public static class SettingsMenu
     private static int _selectedTab;
     internal static OptionButton? TeammatePicker;
     internal static Button? GetHotkeyButton(int slot) => _hotkeyButtons[slot];
+    internal static Button? GetHotkeyButton(PileType slot) => _hotkeyButtons[Array.IndexOf(Hotkeys.Slots, slot)];
+    internal static Button? HideHandHotkeyButton => _hideHandHotkeyButton;
     internal static string HotkeyStatus => _hotkeyStatus?.Text ?? "";
 
     public static bool IsOpen => _layer != null && GodotObject.IsInstanceValid(_layer);
@@ -97,8 +103,9 @@ public static class SettingsMenu
             else
             {
                 KeyCombo? combo = key.Keycode is Key.Backspace or Key.Delete ? null : KeyCombo.From(key);
-                Hotkeys.Draft[_selectedTeammate, slot] = combo;
-                ModLog.Info($"SettingsMenu: Teammate {_selectedTeammate + 1} {PileViewer.SlotPiles[slot]} = {combo?.ToString() ?? "unbound"}");
+                (int row, int col) = slot == HideHandCapture ? (Hotkeys.GlobalRow, 0) : (_selectedTeammate, slot);
+                Hotkeys.Draft[row, col] = combo;
+                ModLog.Info($"SettingsMenu: {Hotkeys.Describe(row, col)} = {combo?.ToString() ?? "unbound"}");
                 Hotkeys.TryCommitDraft(_editableTeammates);
             }
             RefreshHotkeys();
@@ -127,13 +134,18 @@ public static class SettingsMenu
                 if (inputEvent is not InputEventKey { Pressed: true } key || key.IsEcho()) return;
                 Viewport? viewport = __instance.GetViewport();
                 if (viewport == null || viewport.IsInputHandled() || IsTyping() || IsCapturing) return;
-                if (Hotkeys.Match(key) is not { } hit) return;
+                bool hide = Hotkeys.MatchHideHand(key);
+                var hit = hide ? null : Hotkeys.Match(key);
+                if (!hide && hit == null) return;
                 if (Hotkeys.NativeAction(key.Keycode) is string action)
                 {
                     ModLog.Info($"Hotkey {KeyCombo.From(key)} skipped: the game's '{action}' uses {key.Keycode}");
                     return;
                 }
-                if (PileViewer.OpenTeammatePile(hit.teammate, hit.pile)) viewport.SetInputAsHandled();
+                bool handled = hide ? HandViewer.ToggleHideOwnHandHotkey()
+                    : hit!.Value.pile == PileType.Hand ? HandViewer.ToggleTeammate(hit.Value.teammate)
+                    : PileViewer.OpenTeammatePile(hit.Value.teammate, hit.Value.pile);
+                if (handled) viewport.SetInputAsHandled();
             }
             catch (Exception ex)
             {
@@ -294,11 +306,12 @@ public static class SettingsMenu
         };
         box.AddChild(TeammatePicker);
 
-        for (int slot = 0; slot < PileViewer.SlotPiles.Length; slot++)
+        for (int slot = 0; slot < Hotkeys.Slots.Length; slot++)
         {
             var row = new HBoxContainer();
             box.AddChild(row);
-            var label = new Label { Text = PileViewer.PileName(PileViewer.SlotPiles[slot]), SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
+            string name = Hotkeys.Slots[slot] == PileType.Hand ? "Hand (show/hide)" : PileViewer.PileName(Hotkeys.Slots[slot]);
+            var label = new Label { Text = name, SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
             label.AddThemeFontSizeOverride("font_size", 14);
             row.AddChild(label);
             var button = new Button { CustomMinimumSize = new Vector2(150f, 0f), FocusMode = Control.FocusModeEnum.None };
@@ -329,10 +342,21 @@ public static class SettingsMenu
         });
     }
 
+    private static string Describe((int teammate, int slot) key) => Hotkeys.Describe(key.teammate, key.slot);
+
     private static void RefreshHotkeys()
     {
         if (!IsOpen || _hotkeyStatus == null) return;
         var conflicts = Hotkeys.DraftConflicts(_editableTeammates);
+        if (_hideHandHotkeyButton != null && GodotObject.IsInstanceValid(_hideHandHotkeyButton))
+        {
+            bool hideIssue = conflicts.TryGetValue((Hotkeys.GlobalRow, 0), out Hotkeys.Conflict hi);
+            _hideHandHotkeyButton.Text = _capturingSlot == HideHandCapture
+                ? "Press a key…"
+                : Hotkeys.Draft[Hotkeys.GlobalRow, 0]?.ToString() ?? "(unbound)";
+            if (hideIssue) _hideHandHotkeyButton.AddThemeColorOverride("font_color", hi.Blocking ? ConflictColor : WarningColor);
+            else _hideHandHotkeyButton.RemoveThemeColorOverride("font_color");
+        }
         for (int slot = 0; slot < _hotkeyButtons.Length; slot++)
         {
             Button? button = _hotkeyButtons[slot];
@@ -353,22 +377,27 @@ public static class SettingsMenu
         else if (conflicts.Any(c => c.Value.Blocking))
         {
             var first = conflicts.First(c => c.Value.Blocking);
-            _hotkeyStatus.Text = $"Not saved — conflict: Teammate {first.Key.teammate + 1} " +
-                $"{PileViewer.PileName(PileViewer.SlotPiles[first.Key.slot])}: {first.Value.Message}. Rebind to resolve.";
+            _hotkeyStatus.Text = "Not saved — conflict: " +
+                $"{Describe(first.Key)}: {first.Value.Message}. Rebind to resolve.";
             _hotkeyStatus.AddThemeColorOverride("font_color", ConflictColor);
         }
         else if (conflicts.Count > 0)
         {
             // Prefer a warning about the teammate being viewed.
             var first = conflicts.OrderBy(c => c.Key.teammate == _selectedTeammate ? 0 : 1).First();
-            _hotkeyStatus.Text = $"Saved, but note — Teammate {first.Key.teammate + 1} " +
-                $"{PileViewer.PileName(PileViewer.SlotPiles[first.Key.slot])}: {first.Value.Message}.";
+            _hotkeyStatus.Text = "Saved, but note — " +
+                $"{Describe(first.Key)}: {first.Value.Message}.";
             _hotkeyStatus.AddThemeColorOverride("font_color", WarningColor);
         }
         else
         {
             _hotkeyStatus.Text = "Saved. Hotkeys open the selected teammate's piles during combat.";
             _hotkeyStatus.AddThemeColorOverride("font_color", new Color(0.6f, 0.6f, 0.6f));
+        }
+        if (_hideHandHotkeyStatus != null && GodotObject.IsInstanceValid(_hideHandHotkeyStatus))
+        {
+            _hideHandHotkeyStatus.Text = _hotkeyStatus.Text;
+            _hideHandHotkeyStatus.AddThemeColorOverride("font_color", _hotkeyStatus.GetThemeColor("font_color"));
         }
     }
 
@@ -384,6 +413,27 @@ public static class SettingsMenu
             v => Settings.HandVisible = (float)v / 100f);
         HandShadowHiddenSlider = AddSlider(tab, "Teammate hand shadow while your hand is hidden", 0f, 100f,
             Settings.HandShadowWhenHidden * 100f, v => Settings.HandShadowWhenHidden = (float)v / 100f);
+        var hotkeyRow = new HBoxContainer();
+        tab.AddChild(hotkeyRow);
+        var hotkeyLabel = new Label { Text = "Hide/show my hand hotkey", SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
+        hotkeyLabel.AddThemeFontSizeOverride("font_size", 14);
+        hotkeyRow.AddChild(hotkeyLabel);
+        _hideHandHotkeyButton = new Button { CustomMinimumSize = new Vector2(150f, 0f), FocusMode = Control.FocusModeEnum.None };
+        _hideHandHotkeyButton.AddThemeFontSizeOverride("font_size", 14);
+        _hideHandHotkeyButton.Pressed += () =>
+        {
+            _capturingSlot = HideHandCapture;
+            RefreshHotkeys();
+        };
+        hotkeyRow.AddChild(_hideHandHotkeyButton);
+        _hideHandHotkeyStatus = new Label
+        {
+            AutowrapMode = TextServer.AutowrapMode.WordSmart,
+            CustomMinimumSize = new Vector2(PanelWidth - 28f, 0f),
+        };
+        _hideHandHotkeyStatus.AddThemeFontSizeOverride("font_size", 12);
+        tab.AddChild(_hideHandHotkeyStatus);
+
         var note = new Label
         {
             Text = "Click the eye in a teammate's strip to show their hand behind yours (one teammate at a time). " +

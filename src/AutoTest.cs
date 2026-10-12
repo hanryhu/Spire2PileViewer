@@ -325,9 +325,9 @@ public static class AutoTest
         await PressKey(Key.C, shift: true);
         Log($"hotkeys: draw→Shift+C: button='{SettingsMenu.GetHotkeyButton(0)!.Text}' status='{SettingsMenu.HotkeyStatus}' active draw={Hotkeys.Active[0, 0]}");
         // Rebind discard to Shift+B → conflict resolved → saved.
-        SettingsMenu.GetHotkeyButton(2)!.EmitSignal(BaseButton.SignalName.Pressed);
+        SettingsMenu.GetHotkeyButton(PileType.Discard)!.EmitSignal(BaseButton.SignalName.Pressed);
         await PressKey(Key.B, shift: true);
-        Log($"hotkeys: discard→Shift+B: status='{SettingsMenu.HotkeyStatus}' active draw={Hotkeys.Active[0, 0]} discard={Hotkeys.Active[0, 2]}");
+        Log($"hotkeys: discard→Shift+B: status='{SettingsMenu.HotkeyStatus}' active draw={Hotkeys.Active[0, 0]} discard={Hotkeys.Active[0, Array.IndexOf(Hotkeys.Slots, PileType.Discard)]}");
         SettingsMenu.Close();
         await PressKey(Key.C, shift: true);
         Log($"hotkeys: Shift+C (new draw binding) → {PileViewer.DescribeOpenView()}");
@@ -468,6 +468,35 @@ public static class AutoTest
         await ExerciseAccuracy(mutator, observer);
         if (observer) await ExerciseHideHand();
         await ExerciseThirdPlayer(observer);
+        if (observer) await ExerciseHandHotkeys();
+    }
+
+    /// <summary>hv9: optional hotkeys — per-teammate Hand toggle and Hide/show my hand; unbound by default.</summary>
+    private static async Task ExerciseHandHotkeys()
+    {
+        int handSlot = Array.IndexOf(Hotkeys.Slots, PileType.Hand);
+        Log($"hv9: defaults: teammate1 Hand={Hotkeys.Active[0, handSlot]?.ToString() ?? "unbound"} hideHand={Hotkeys.Active[Hotkeys.GlobalRow, 0]?.ToString() ?? "unbound"}");
+        if (HandViewer.HideOwnHand) HandViewer.ToggleHideOwnHand();
+        HandViewer.Reset();
+        await Wait(0.5);
+
+        SettingsMenu.Open();
+        SettingsMenu.TeammatePicker!.Select(0);
+        SettingsMenu.GetHotkeyButton(PileType.Hand)!.EmitSignal(BaseButton.SignalName.Pressed);
+        await PressKey(Key.H, shift: true);
+        SettingsMenu.HideHandHotkeyButton!.EmitSignal(BaseButton.SignalName.Pressed);
+        await PressKey(Key.J, shift: true);
+        Log($"hv9: bound: teammate1 Hand={Hotkeys.Active[0, handSlot]} hideHand={Hotkeys.Active[Hotkeys.GlobalRow, 0]} status='{SettingsMenu.HotkeyStatus}'");
+        SettingsMenu.Close();
+
+        await PressKey(Key.H, shift: true);
+        Log("hv9: Shift+H → " + HandViewer.DescribeState());
+        await PressKey(Key.J, shift: true);
+        Log("hv9: Shift+J → " + HandViewer.DescribeState());
+        await PressKey(Key.J, shift: true);
+        Log("hv9: Shift+J again → " + HandViewer.DescribeState());
+        await PressKey(Key.H, shift: true);
+        Log("hv9: Shift+H again → " + HandViewer.DescribeState());
     }
 
     /// <summary>

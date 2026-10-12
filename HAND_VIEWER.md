@@ -20,7 +20,7 @@ Tags are `hvN` (Pile Viewer uses `mN`). Each milestone ends in an annotated tag 
 | 7.1 | Hide hand button: default centered above the energy counter (`NCombatUi.EnergyCounterContainer`), plain drag moves it (6 px threshold; a drag is not a click), offset saved (`hideButtonOffset`), F1 "Reset strip & Hide hand button positions". Verified with real mouse events | done | `hv7.1` |
 | 7.2 | Hide hand reworked (user changed mind): your hand is hidden completely (`CardHolderContainer` alpha 0, hitboxes MouseFilter Ignore so nothing is clicked by accident), the teammate's hand stays shadowed with its own lighter amount — new setting "Teammate hand shadow while your hand is hidden" (default 15 %). The hv7 outline look is gone | done | `hv7.2` |
 | 8 | 3+ players: in a 3-player game the host switched its view 1000 → 1001 (Regent) → 1000 with the strips' eyes; each time the rendered hand matched that client's own hand exactly; hv6 phases unaffected | done | `hv8` |
-| 9 | Hotkeys (TBD — evaluate with and without) | — | `hv9` |
+| 9 | Hotkeys (optional, **unbound by default** so the game plays the same "without"): per-teammate **Hand** binding (4th row in the Pile Viewer tab's hotkey table, strip order draw/hand/exhaust/discard) toggles that teammate's hand; global **Hide/show my hand** binding in the Hand Viewer tab. Same capture UX, conflict rules (Hide hand = always-editable global row) and below-the-game dispatch. Verified: Shift+H / Shift+J after binding; Pile Viewer regression suite still passes | done | `hv9` |
 
 ## Dev / test loop
 
@@ -68,4 +68,4 @@ Tags are `hvN` (Pile Viewer uses `mN`). Each milestone ends in an annotated tag 
 - Accuracy notes: Madness doesn't exist in v0.111.0 (Enlightenment used as the played cost-changer). Vulnerable only
   changes numbers while aiming at a target (native too), so it doesn't apply to an un-targeted hand view.
   Mummified Hand not yet exercised (needs a power card played).
-- **Open — hotkeys (hv9):** decide after hv8 with and without.
+- Hotkeys (hv9): shipped unbound so you can try with and without; bind them in F1 to use.

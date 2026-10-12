@@ -40,7 +40,19 @@ public static class Hotkeys
 {
     public const int MaxTeammates = 3;
 
-    // Keys the game doesn't use; modifiers distinguish teammates.
+    /// <summary>Per-teammate actions, in strip order: draw | hand (toggle their hand view) | exhaust | discard.</summary>
+    public static readonly PileType[] Slots = PileViewer.StripSlots;
+
+    /// <summary>Row after the teammates holding the one global binding (slot 0): Hide/show my hand. Always editable.</summary>
+    public const int GlobalRow = MaxTeammates;
+
+    private const int Rows = MaxTeammates + 1;
+
+    public static string Describe(int row, int slot) => row == GlobalRow
+        ? "Hide/show my hand"
+        : $"Teammate {row + 1} {PileViewer.PileName(Slots[slot])}";
+
+    // Keys the game doesn't use; modifiers distinguish teammates. Hand and Hide hand start unbound (hv9: optional).
     private static readonly Dictionary<PileType, Key> DefaultKeys = new()
     {
         [PileType.Draw] = Key.Z,
@@ -62,12 +74,12 @@ public static class Hotkeys
 
     public static KeyCombo?[,] Defaults()
     {
-        var map = new KeyCombo?[MaxTeammates, PileViewer.SlotPiles.Length];
+        var map = new KeyCombo?[Rows, Slots.Length];
         for (int t = 0; t < MaxTeammates; t++)
         {
-            for (int s = 0; s < PileViewer.SlotPiles.Length; s++)
+            for (int s = 0; s < Slots.Length; s++)
             {
-                Key key = DefaultKeys[PileViewer.SlotPiles[s]];
+                if (!DefaultKeys.TryGetValue(Slots[s], out Key key)) continue;
                 map[t, s] = t switch
                 {
                     0 => new KeyCombo(key, Ctrl: false, Shift: true, Alt: false),
@@ -92,9 +104,10 @@ public static class Hotkeys
     public static Dictionary<(int teammate, int slot), Conflict> DraftConflicts(int editableTeammates)
     {
         var conflicts = new Dictionary<(int, int), Conflict>();
-        for (int t = 0; t < MaxTeammates; t++)
+        bool Editable(int row) => row == GlobalRow || row < editableTeammates;
+        for (int t = 0; t < Rows; t++)
         {
-            for (int s = 0; s < PileViewer.SlotPiles.Length; s++)
+            for (int s = 0; s < Slots.Length; s++)
             {
                 if (Draft[t, s] is not KeyCombo combo) continue;
                 if (Reserved.Contains(combo))
@@ -103,13 +116,13 @@ public static class Hotkeys
                     continue;
                 }
                 Conflict? found = null;
-                for (int t2 = 0; t2 < MaxTeammates && found is not { Blocking: true }; t2++)
+                for (int t2 = 0; t2 < Rows && found is not { Blocking: true }; t2++)
                 {
-                    for (int s2 = 0; s2 < PileViewer.SlotPiles.Length; s2++)
+                    for (int s2 = 0; s2 < Slots.Length; s2++)
                     {
                         if ((t2 == t && s2 == s) || Draft[t2, s2] != combo) continue;
-                        string other = $"Teammate {t2 + 1} {PileViewer.PileName(PileViewer.SlotPiles[s2])}";
-                        if (t < editableTeammates && t2 < editableTeammates)
+                        string other = Describe(t2, s2);
+                        if (Editable(t) && Editable(t2))
                         {
                             found = new Conflict($"{combo} is also {other}", Blocking: true);
                             break;
@@ -175,24 +188,28 @@ public static class Hotkeys
     {
         for (int t = 0; t < MaxTeammates; t++)
         {
-            for (int s = 0; s < PileViewer.SlotPiles.Length; s++)
+            for (int s = 0; s < Slots.Length; s++)
             {
-                if (Active[t, s] is KeyCombo combo && combo.Matches(ev)) return (t, PileViewer.SlotPiles[s]);
+                if (Active[t, s] is KeyCombo combo && combo.Matches(ev)) return (t, Slots[s]);
             }
         }
         return null;
     }
+
+    /// <summary>The Hide/show my hand binding matches this key event.</summary>
+    public static bool MatchHideHand(InputEventKey ev) => Active[GlobalRow, 0] is KeyCombo combo && combo.Matches(ev);
 
     public static Dictionary<string, string> Serialize()
     {
         var dict = new Dictionary<string, string>();
         for (int t = 0; t < MaxTeammates; t++)
         {
-            for (int s = 0; s < PileViewer.SlotPiles.Length; s++)
+            for (int s = 0; s < Slots.Length; s++)
             {
-                dict[$"teammate{t + 1}.{PileViewer.SlotPiles[s]}"] = Active[t, s]?.Serialize() ?? "";
+                dict[$"teammate{t + 1}.{Slots[s]}"] = Active[t, s]?.Serialize() ?? "";
             }
         }
+        dict["hideHand"] = Active[GlobalRow, 0]?.Serialize() ?? "";
         return dict;
     }
 
@@ -203,14 +220,15 @@ public static class Hotkeys
         {
             for (int t = 0; t < MaxTeammates; t++)
             {
-                for (int s = 0; s < PileViewer.SlotPiles.Length; s++)
+                for (int s = 0; s < Slots.Length; s++)
                 {
-                    if (dict.TryGetValue($"teammate{t + 1}.{PileViewer.SlotPiles[s]}", out string? value))
+                    if (dict.TryGetValue($"teammate{t + 1}.{Slots[s]}", out string? value))
                     {
                         Active[t, s] = KeyCombo.Parse(value);
                     }
                 }
             }
+            if (dict.TryGetValue("hideHand", out string? hide)) Active[GlobalRow, 0] = KeyCombo.Parse(hide);
         }
         Draft = (KeyCombo?[,])Active.Clone();
     }

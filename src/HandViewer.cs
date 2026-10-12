@@ -39,6 +39,24 @@ public static class HandViewer
         ModLog.Info($"HandViewer: viewing {(ViewedNetId?.ToString() ?? "nobody")}");
     }
 
+    /// <summary>Hotkey: toggle teammate #index's hand view (0-based among PileViewer.Teammates()).</summary>
+    internal static bool ToggleTeammate(int teammateIndex)
+    {
+        if (!Settings.HandViewerEnabled) return false;
+        var teammates = PileViewer.Teammates();
+        if (teammateIndex >= teammates.Count) return false;
+        Toggle(teammates[teammateIndex].player);
+        return true;
+    }
+
+    /// <summary>Hotkey: hide/show your own hand (only while the Hide hand feature is on).</summary>
+    internal static bool ToggleHideOwnHandHotkey()
+    {
+        if (!Settings.HandViewerEnabled || !Settings.HideHandButtonEnabled) return false;
+        ToggleHideOwnHand();
+        return true;
+    }
+
     public static void ToggleHideOwnHand()
     {
         HideOwnHand = !HideOwnHand;
