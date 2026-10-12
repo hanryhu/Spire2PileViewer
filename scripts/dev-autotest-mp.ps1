@@ -3,6 +3,7 @@
 # instance exercises its teammates' strips. Logs: %APPDATA%\SlayTheSpire2\spire2pileviewer_{host,1000,...}_log.txt
 param(
     [int]$Players = 2,
+    [ValidateSet('piles', 'hands')][string]$Suite = 'piles',
     [string]$GameDir = 'C:\Program Files (x86)\Steam\steamapps\common\Slay the Spire 2'
 )
 
@@ -11,4 +12,4 @@ if (Get-Process SlayTheSpire2 -ErrorAction SilentlyContinue) {
     exit 1
 }
 & (Join-Path $PSScriptRoot 'install-local.ps1') -GameDir $GameDir
-& (Join-Path $PSScriptRoot 'launch-mp.ps1') -Players $Players -GameDir $GameDir -ExtraArgs '-pileviewerautotest', '-pileviewerplayers', $Players
+& (Join-Path $PSScriptRoot 'launch-mp.ps1') -Players $Players -GameDir $GameDir -ExtraArgs '-pileviewerautotest', '-pileviewerplayers', $Players, '-autotestsuite', $Suite

@@ -663,7 +663,7 @@ public static class PileViewer
         }
     }
 
-    private static string DescribeTree(Node node, int depth)
+    internal static string DescribeTree(Node node, int depth)
     {
         string line = new string(' ', depth * 2) + $"{node.Name} ({node.GetClass()})";
         if (node is Control c) line += $" pos={c.Position} size={c.Size} scale={c.Scale}";

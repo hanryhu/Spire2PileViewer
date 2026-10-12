@@ -12,8 +12,6 @@ if (Get-Process SlayTheSpire2 -ErrorAction SilentlyContinue) {
 }
 & (Join-Path $PSScriptRoot 'install-local.ps1') -GameDir $GameDir
 
-$appId = Join-Path $GameDir 'steam_appid.txt'
-if (-not (Test-Path $appId)) {
-    Set-Content -Path $appId -Value 2868840 -Encoding ascii
-}
+& (Join-Path $PSScriptRoot 'test-settings.ps1') -Mode apply -GameDir $GameDir
+if (-not $?) { exit 1 }
 Start-Process -FilePath (Join-Path $GameDir 'SlayTheSpire2.exe') -WorkingDirectory $GameDir -ArgumentList (@('-pileviewerautotest') + $ExtraArgs)

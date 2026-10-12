@@ -1,4 +1,7 @@
 using System;
+using MegaCrit.Sts2.Core.Saves;
+using MegaCrit.Sts2.Core.Nodes.Cards.Holders;
+using MegaCrit.Sts2.Core.Nodes.Combat;
 using MegaCrit.Sts2.Core.Nodes.CommonUi;
 using System.Collections.Generic;
 using System.Linq;
@@ -105,6 +108,19 @@ public static class AutoTest
     /// <summary>0 for the first client (-clientId 1000), 1 for the next, ...; -1 for the host.</summary>
     private static readonly int ClientIndex = ArgValue("-clientId", 999) - 1000;
 
+    /// <summary>
+    /// -autotestsuite piles|hands: which feature to exercise (default piles = the Pile Viewer checks).
+    /// "hands" is the Hand Viewer suite (see HAND_VIEWER.md); it grows with each Hand Viewer milestone.
+    /// </summary>
+    private static readonly string Suite = ArgString("-autotestsuite", "piles");
+
+    private static string ArgString(string name, string fallback)
+    {
+        string[] args = OS.GetCmdlineArgs();
+        int i = Array.IndexOf(args, name);
+        return i >= 0 && i + 1 < args.Length ? args[i + 1] : fallback;
+    }
+
     private static int ArgValue(string name, int fallback)
     {
         string[] args = OS.GetCmdlineArgs();
@@ -154,7 +170,8 @@ public static class AutoTest
             await RunManager.Instance.EnterRoomDebug(RoomType.Monster, MapPointType.Unassigned, encounter);
             Log($"entered encounter {encounter.Id.Entry}");
 
-            await ExerciseStrips(mutator: true, observer: true);
+            if (Suite == "hands") await ExerciseHands(mutator: true, observer: true);
+            else await ExerciseStrips(mutator: true, observer: true);
         }
         catch (Exception ex)
         {
@@ -198,6 +215,7 @@ public static class AutoTest
             }
 
             if (Showcase) await RunShowcase(isHost);
+            else if (Suite == "hands") await ExerciseHands(mutator: ClientIndex == 0, observer: isHost);
             else await ExerciseStrips(mutator: ClientIndex == 0, observer: isHost);
         }
         catch (Exception ex)
@@ -373,6 +391,44 @@ public static class AutoTest
         await Wait(0.1);
         Input.ParseInputEvent(up);
         await Wait(0.9);
+    }
+
+    /// <summary>
+    /// Hand Viewer suite. Milestone 1: probe — log the native hand's node structure (layout, holders, the
+    /// Hand Card Count index labels, the peek "eye" button) and every teammate's hand, as groundwork for the UI.
+    /// </summary>
+    private static async Task ExerciseHands(bool mutator, bool observer)
+    {
+        Settings.ResetForAutoTest();
+        for (int i = 0; i < 120 && !CombatManager.Instance.IsInProgress; i++) await Wait(0.25);
+        Log($"hands: combat in progress: {CombatManager.Instance.IsInProgress} (mutator={mutator}, observer={observer})");
+        await Wait(3.0);
+
+        NPlayerHand? hand = NPlayerHand.Instance;
+        if (hand == null)
+        {
+            Log("hands: no NPlayerHand");
+        }
+        else
+        {
+            Log($"hands: NPlayerHand pos={hand.Position} global={hand.GlobalPosition} size={hand.Size} holders={hand.ActiveHolders.Count} " +
+                $"showCardIndices={SaveManager.Instance.PrefsSave.ShowCardIndices}");
+            if (hand.ActiveHolders.FirstOrDefault() is NHandCardHolder holder)
+            {
+                Log("hands: first holder tree:\n" + PileViewer.DescribeTree(holder, 0));
+            }
+            Log("hands: peek button tree:\n" + PileViewer.DescribeTree(hand.PeekButton, 0));
+            Log("hands: holder transforms: " + string.Join("; ", hand.ActiveHolders.Select((h, i) =>
+                $"#{i} pos={h.Position} rot={h.RotationDegrees:0.#} scale={h.Scale.X:0.##} card={h.CardNode?.Model?.Id.Entry}")));
+        }
+
+        foreach (var (number, player) in PileViewer.Teammates())
+        {
+            var cards = PileType.Hand.GetPile(player).Cards;
+            Log($"hands: P{number} {player.Character.Id.Entry} hand ({cards.Count}): " +
+                string.Join(", ", cards.Select(c => $"{c.Title}[{c.EnergyCost.GetWithModifiers(CostModifiers.All)}]")));
+        }
+        Log("done");
     }
 
     private static async Task WatchCounts(int seconds)
