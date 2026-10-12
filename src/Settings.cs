@@ -29,6 +29,7 @@ public static class Settings
         public bool hideHandButton { get; set; } = true;
         public float handShadow { get; set; } = 0.5f;
         public float handVisible { get; set; } = 0.25f;
+        public float handShadowHidden { get; set; } = 0.15f;
         public float[]? hideButtonOffset { get; set; }
     }
 
@@ -60,6 +61,9 @@ public static class Settings
 
     /// <summary>Drag offset of the "Hide hand" button from its default spot above the energy counter.</summary>
     public static Vector2 HideButtonOffset = Vector2.Zero;
+
+    /// <summary>Teammate hand shadow while your own hand is hidden (lighter, since nothing covers it).</summary>
+    public static float HandShadowWhenHidden = 0.15f;
 
     /// <summary>% of each teammate card visible above your own hand (0..1).</summary>
     public static float HandVisible = 0.25f;
@@ -121,6 +125,7 @@ public static class Settings
             HideHandButtonEnabled = dto.hideHandButton;
             HandShadow = Math.Clamp(dto.handShadow, 0f, 1f);
             HandVisible = Math.Clamp(dto.handVisible, 0f, 1f);
+            HandShadowWhenHidden = Math.Clamp(dto.handShadowHidden, 0f, 1f);
             HideButtonOffset = dto.hideButtonOffset is { Length: 2 } o ? new Vector2(o[0], o[1]) : Vector2.Zero;
             ModLog.Info($"Settings loaded: enabled={Enabled} scale={Scale} opacity={Opacity} showSelf={ShowSelf} textList={TextList} offsets={DescribeOffsets()}");
         }
@@ -147,6 +152,7 @@ public static class Settings
                 hideHandButton = HideHandButtonEnabled,
                 handShadow = HandShadow,
                 handVisible = HandVisible,
+                handShadowHidden = HandShadowWhenHidden,
                 hideButtonOffset = HideButtonOffset == Vector2.Zero ? null : new[] { HideButtonOffset.X, HideButtonOffset.Y },
             };
             File.WriteAllText(FilePath, JsonSerializer.Serialize(dto, new JsonSerializerOptions { WriteIndented = true }));
@@ -178,6 +184,7 @@ public static class Settings
         HideHandButtonEnabled = true;
         HandShadow = 0.5f;
         HandVisible = 0.25f;
+        HandShadowWhenHidden = 0.15f;
         HideButtonOffset = Vector2.Zero;
         Save();
         ModLog.Info("Settings: all reset to defaults");

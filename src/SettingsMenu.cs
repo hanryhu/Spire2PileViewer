@@ -45,6 +45,7 @@ public static class SettingsMenu
     internal static CheckButton? HideHandButtonToggle;
     internal static HSlider? HandShadowSlider;
     internal static HSlider? HandVisibleSlider;
+    internal static HSlider? HandShadowHiddenSlider;
     private static int _selectedTab;
     internal static OptionButton? TeammatePicker;
     internal static Button? GetHotkeyButton(int slot) => _hotkeyButtons[slot];
@@ -381,6 +382,8 @@ public static class SettingsMenu
             v => Settings.HandShadow = (float)v / 100f);
         HandVisibleSlider = AddSlider(tab, "% of card visible", 0f, 100f, Settings.HandVisible * 100f,
             v => Settings.HandVisible = (float)v / 100f);
+        HandShadowHiddenSlider = AddSlider(tab, "Teammate hand shadow while your hand is hidden", 0f, 100f,
+            Settings.HandShadowWhenHidden * 100f, v => Settings.HandShadowWhenHidden = (float)v / 100f);
         var note = new Label
         {
             Text = "Click the eye in a teammate's strip to show their hand behind yours (one teammate at a time). " +

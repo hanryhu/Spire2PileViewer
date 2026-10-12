@@ -170,7 +170,7 @@ public static class HandViewer
             FocusMode = Control.FocusModeEnum.None,
             ZIndex = 100,
             CustomMinimumSize = new Vector2(120f, 30f),
-            TooltipText = "Hide your own hand (shown as an outline) to see your teammate's hand behind it.\nDrag to move (reset in the F1 menu).",
+            TooltipText = "Hide your own hand to see your teammate's hand behind it.\nDrag to move (reset in the F1 menu).",
         };
         _hideButtonStyle = new StyleBoxFlat
         {
@@ -264,7 +264,8 @@ public static class HandViewer
         _cardLayer.Position = container.Position;
         _cardLayer.Size = container.Size;
         _cardLayer.Scale = container.Scale;
-        float shade = 1f - 0.6f * Settings.HandShadow; // 0 → untinted, 1 → dark like a heavy shadow
+        // 0 → untinted, 1 → dark like a heavy shadow; a separate (lighter by default) amount while your hand is hidden.
+        float shade = 1f - 0.6f * (HideOwnHand ? Settings.HandShadowWhenHidden : Settings.HandShadow);
         _cardLayer.Modulate = new Color(shade, shade, shade);
 
         if (_shownFor != viewed!.NetId) ClearCards();
@@ -365,57 +366,30 @@ public static class HandViewer
 
     // ---- hv7: hide your own hand ----
 
-    // Dark translucent silhouette for the hidden card's parts, plus a white outline around each card.
-    private static readonly Color HiddenFill = new(0.12f, 0.12f, 0.16f, 0.4f);
-
-    private static readonly Color OutlineColor = new(1f, 1f, 1f, 0.9f);
-
     private static bool _hiddenApplied;
 
-    private const string OutlineName = "Spire2PileViewer_Outline";
-
     /// <summary>
-    /// Hidden: every part of your cards' bodies is dimmed to a dark translucent shadow and a white outline is drawn
-    /// around each card frame, so your hand stays visible as a reminder while the teammate's hand shows through.
-    /// Re-applied every frame (cards come and go, the game re-sets parts of them). Unhiding restores the native look.
+    /// Hidden: your hand's card container is fully transparent and its cards ignore the mouse (so nothing is clicked
+    /// by accident), leaving only the teammate's shadowed hand. Re-applied every frame because the native layout
+    /// resets the hitboxes. Unhiding restores the native look and input.
     /// </summary>
     private static void ApplyHiddenLook(bool hidden)
     {
         if (!hidden && !_hiddenApplied) return;
         if (NPlayerHand.Instance is not NPlayerHand hand) return;
+        Control container = hand.CardHolderContainer;
+        container.Modulate = hidden ? new Color(1f, 1f, 1f, 0f) : Colors.White;
         foreach (NHandCardHolder holder in hand.ActiveHolders)
         {
-            NCard? card = holder.CardNode;
-            if (card?.Body is not Control body) continue;
-            Panel? outline = body.GetNodeOrNull<Panel>(OutlineName);
-            foreach (Node child in body.GetChildren())
-            {
-                if (child is CanvasItem item && child != outline) item.Modulate = hidden ? HiddenFill : Colors.White;
-            }
-            if (hidden && outline == null)
-            {
-                // Card frame is 300x422 centered on the body (probe hv1: Frame at (-150,-211)).
-                outline = new Panel { Name = OutlineName, MouseFilter = Control.MouseFilterEnum.Ignore,
-                    Position = new Vector2(-150f, -211f), Size = new Vector2(300f, 422f) };
-                var style = new StyleBoxFlat { BgColor = new Color(0f, 0f, 0f, 0f), BorderColor = OutlineColor };
-                style.SetBorderWidthAll(4);
-                style.SetCornerRadiusAll(14);
-                outline.AddThemeStyleboxOverride("panel", style);
-                body.AddChild(outline);
-            }
-            else if (!hidden && outline != null)
-            {
-                outline.QueueFree();
-            }
-            if (!hidden) holder.UpdateCard(); // let the game restore the highlight (playable glow) itself
+            holder.Hitbox.MouseFilter = hidden ? Control.MouseFilterEnum.Ignore : Control.MouseFilterEnum.Stop;
         }
         _hiddenApplied = hidden;
     }
 
     /// <summary>Your own hand's look (auto-test): first card's body part colors.</summary>
-    internal static string DescribeOwnHandLook() => NPlayerHand.Instance?.ActiveHolders.FirstOrDefault()?.CardNode is NCard c && c.Body != null
-        ? $"frame={(c.Body.GetNodeOrNull<CanvasItem>("Frame")?.Modulate.ToString() ?? "?")} outline={(c.Body.GetNodeOrNull<Panel>(OutlineName) is Panel o && !o.IsQueuedForDeletion() ? "yes" : "no")}"
-        : "no card";
+    internal static string DescribeOwnHandLook() => NPlayerHand.Instance is NPlayerHand h
+        ? $"hand alpha={h.CardHolderContainer.Modulate.A:0.##} hitboxes={string.Join("/", h.ActiveHolders.Select(x => x.Hitbox.MouseFilter.ToString()[0]))} teammate shade={(_cardLayer != null && GodotObject.IsInstanceValid(_cardLayer) ? _cardLayer.Modulate.R.ToString("0.##") : "-")}"
+        : "no hand";
 
     /// <summary>"ID|cost|description" for one rendered card (auto-test comparisons).</summary>
     internal static string DescribeCardNode(NCard? card) => card == null ? "?" :
