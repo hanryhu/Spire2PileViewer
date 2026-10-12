@@ -1,8 +1,13 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using Godot;
 using MegaCrit.Sts2.Core.Entities.Cards;
 using MegaCrit.Sts2.Core.Entities.Players;
+using MegaCrit.Sts2.Core.Helpers;
+using MegaCrit.Sts2.Core.Models;
+using MegaCrit.Sts2.Core.Nodes.Cards;
+using MegaCrit.Sts2.Core.Nodes.Cards.Holders;
 using MegaCrit.Sts2.Core.Nodes.Combat;
 using MegaCrit.Sts2.Core.Nodes.Rooms;
 using MegaCrit.Sts2.Core.Nodes.Screens.Capstones;
@@ -47,9 +52,11 @@ public static class HandViewer
         HideOwnHand = false;
         if (_hideButton != null && GodotObject.IsInstanceValid(_hideButton)) _hideButton.QueueFree();
         _hideButton = null;
-        if (_textPanel != null && GodotObject.IsInstanceValid(_textPanel)) _textPanel.QueueFree();
-        _textPanel = null;
         _lastText = "";
+        ClearCards();
+        if (_cardLayer != null && GodotObject.IsInstanceValid(_cardLayer)) _cardLayer.QueueFree();
+        _cardLayer = null;
+        if (NPlayerHand.Instance is NPlayerHand hand) ShiftIndexLabels(hand, 0f);
     }
 
     /// <summary>Show this teammate's hand (auto-test helper; same as clicking their eye when nothing is shown).</summary>
@@ -66,7 +73,8 @@ public static class HandViewer
         Player? viewed = ViewedNetId is ulong id ? findPlayer(id) : null;
         if (ViewedNetId != null && viewed == null) ViewedNetId = null; // teammate left / not in this combat
         UpdateHideButton(room);
-        UpdateTextPanel(room, viewed);
+        UpdateText(viewed);
+        UpdateCards(viewed);
     }
 
     private static void UpdateHideButton(NCombatRoom room)
@@ -127,10 +135,6 @@ public static class HandViewer
 
     // ---- hv3: text protocol (temporary until hv4 renders real cards) ----
 
-    private static PanelContainer? _textPanel;
-
-    private static Label? _textLabel;
-
     private static string _lastText = "";
 
     /// <summary>"The Silent — Hand (7): Strike [1] · Neutralize [0] · ..." with live energy costs.</summary>
@@ -143,42 +147,150 @@ public static class HandViewer
         return $"{player.Character.Title.GetFormattedText()} — Hand ({cards.Count}): {(cards.Count == 0 ? "(empty)" : list)}";
     }
 
-    private static void UpdateTextPanel(NCombatRoom room, Player? viewed)
+    /// <summary>The hv3 text readout, now only logged (the cards themselves are drawn since hv4).</summary>
+    private static void UpdateText(Player? viewed)
     {
-        bool show = viewed != null && NCapstoneContainer.Instance?.InUse != true;
-        if (!show)
-        {
-            if (_textPanel != null && GodotObject.IsInstanceValid(_textPanel)) _textPanel.Visible = false;
-            _lastText = "";
-            return;
-        }
-        if (_textPanel == null || !GodotObject.IsInstanceValid(_textPanel))
-        {
-            _textPanel = new PanelContainer { Name = "Spire2PileViewer_HandText", ZIndex = 100, MouseFilter = Control.MouseFilterEnum.Ignore };
-            var style = new StyleBoxFlat { BgColor = new Color(0.05f, 0.05f, 0.08f, 0.85f), BorderColor = new Color(0.8f, 0.6f, 0.2f, 0.8f) };
-            style.SetBorderWidthAll(1);
-            style.SetCornerRadiusAll(6);
-            style.SetContentMarginAll(8);
-            _textPanel.AddThemeStyleboxOverride("panel", style);
-            _textLabel = new Label { MouseFilter = Control.MouseFilterEnum.Ignore };
-            _textLabel.AddThemeFontSizeOverride("font_size", 16);
-            _textPanel.AddChild(_textLabel);
-            room.AddChild(_textPanel);
-        }
-        _textPanel.Visible = true;
-        string text = DescribeHand(viewed!);
-        if (text != _lastText)
-        {
-            _lastText = text;
-            _textLabel!.Text = text;
-            ModLog.Info("HandViewer: hand text: " + text);
-        }
-        // Centered above where your own hand sits.
-        Vector2 viewport = room.GetViewportRect().Size;
-        _textPanel.GlobalPosition = new Vector2((viewport.X - _textPanel.Size.X) / 2f, viewport.Y * 0.62f);
+        string text = viewed == null ? "" : DescribeHand(viewed);
+        if (text == _lastText) return;
+        _lastText = text;
+        if (text != "") ModLog.Info("HandViewer: hand text: " + text);
     }
 
     internal static string CurrentText => _lastText;
+
+    // ---- hv4: the teammate's hand, drawn behind yours ----
+
+    // Holder hitbox height in the hand scene (probe hv1): a card is 422 units tall before the hand's scale.
+    private const float CardHeight = 422f;
+
+    // Native Hand Card Count label position inside a hand card holder (probe hv1).
+    private const float IndexLabelY = -288f;
+
+    /// <summary>Sibling of NPlayerHand.CardHolderContainer, placed just before it so it draws behind your hand.</summary>
+    private static Control? _cardLayer;
+
+    private static readonly List<(CardModel Model, NHandCardHolder Holder)> _shown = new();
+
+    private static ulong? _shownFor;
+
+    private static double _nextVisualRefresh;
+
+    /// <summary>How far (container units) the teammate's cards sit above yours: "% of card visible" of a card.</summary>
+    private static float RaiseFor(int handSize) => Settings.HandVisible * CardHeight * HandPosHelper.GetScale(Math.Max(handSize, 1)).Y;
+
+    private static void UpdateCards(Player? viewed)
+    {
+        NPlayerHand? hand = NPlayerHand.Instance;
+        bool show = viewed != null && hand != null && NCapstoneContainer.Instance?.InUse != true;
+        if (hand != null) ShiftIndexLabels(hand, show ? RaiseFor(PileType.Hand.GetPile(viewed!).Cards.Count) : 0f);
+        if (!show)
+        {
+            if (_cardLayer != null && GodotObject.IsInstanceValid(_cardLayer)) _cardLayer.Visible = false;
+            if (viewed == null) ClearCards();
+            return;
+        }
+
+        Control container = hand!.CardHolderContainer;
+        if (_cardLayer == null || !GodotObject.IsInstanceValid(_cardLayer))
+        {
+            _shown.Clear();
+            _cardLayer = new Control { Name = "Spire2PileViewer_TeammateHand", MouseFilter = Control.MouseFilterEnum.Ignore };
+            Node parent = container.GetParent();
+            parent.AddChild(_cardLayer);
+            parent.MoveChild(_cardLayer, container.GetIndex()); // just before → drawn behind your cards
+            ModLog.Info($"HandViewer: card layer added under {parent.Name} at index {_cardLayer.GetIndex()}");
+        }
+        _cardLayer.Visible = true;
+        _cardLayer.Position = container.Position;
+        _cardLayer.Size = container.Size;
+        _cardLayer.Scale = container.Scale;
+        float shade = 1f - 0.6f * Settings.HandShadow; // 0 → untinted, 1 → dark like a heavy shadow
+        _cardLayer.Modulate = new Color(shade, shade, shade);
+
+        if (_shownFor != viewed!.NetId) ClearCards();
+        _shownFor = viewed.NetId;
+
+        IReadOnlyList<CardModel> cards = PileType.Hand.GetPile(viewed).Cards;
+        // Drop cards that left the hand, add new ones.
+        for (int i = _shown.Count - 1; i >= 0; i--)
+        {
+            if (!cards.Contains(_shown[i].Model))
+            {
+                if (GodotObject.IsInstanceValid(_shown[i].Holder)) _shown[i].Holder.QueueFree();
+                _shown.RemoveAt(i);
+            }
+        }
+        foreach (CardModel card in cards)
+        {
+            if (_shown.Any(s => s.Model == card)) continue;
+            NCard? node = NCard.Create(card);
+            if (node == null) continue;
+            NHandCardHolder holder = NHandCardHolder.Create(node, hand);
+            _cardLayer.AddChild(holder);
+            holder.SetIndexLabel(0); // no Hand Card Count numbers on the teammate's cards
+            int index = cards.ToList().IndexOf(card);
+            holder.Position = HandPosHelper.GetPosition(cards.Count, index) - new Vector2(0f, RaiseFor(cards.Count));
+            holder.SetScaleInstantly(HandPosHelper.GetScale(cards.Count));
+            holder.SetAngleInstantly(HandPosHelper.GetAngle(cards.Count, index));
+            _shown.Add((card, holder));
+        }
+
+        // Native fan layout for the teammate's hand size, raised so only "% of card visible" peeks out above yours.
+        float raise = RaiseFor(cards.Count);
+        for (int i = 0; i < cards.Count; i++)
+        {
+            var entry = _shown.FirstOrDefault(s => s.Model == cards[i]);
+            if (entry.Holder == null || !GodotObject.IsInstanceValid(entry.Holder)) continue;
+            _cardLayer.MoveChild(entry.Holder, i);
+            entry.Holder.SetTargetPosition(HandPosHelper.GetPosition(cards.Count, i) - new Vector2(0f, raise));
+            entry.Holder.SetTargetAngle(HandPosHelper.GetAngle(cards.Count, i));
+            entry.Holder.SetTargetScale(HandPosHelper.GetScale(cards.Count));
+        }
+
+        // The game only refreshes card nodes it can find (NCard.FindOnTable), which excludes ours — refresh
+        // costs/numbers ourselves a few times a second.
+        double now = Time.GetTicksMsec() / 1000.0;
+        if (now >= _nextVisualRefresh)
+        {
+            _nextVisualRefresh = now + 0.25;
+            foreach (var (_, holder) in _shown)
+            {
+                if (GodotObject.IsInstanceValid(holder)) holder.CardNode?.UpdateVisuals(PileType.Hand, CardPreviewMode.Normal);
+            }
+        }
+    }
+
+    private static void ClearCards()
+    {
+        foreach (var (_, holder) in _shown)
+        {
+            if (GodotObject.IsInstanceValid(holder)) holder.QueueFree();
+        }
+        _shown.Clear();
+        _shownFor = null;
+    }
+
+    /// <summary>Lift your own Hand Card Count numbers by <paramref name="raise"/> so they clear the teammate's cards.</summary>
+    private static void ShiftIndexLabels(NPlayerHand hand, float raise)
+    {
+        foreach (NHandCardHolder holder in hand.ActiveHolders)
+        {
+            if (holder.GetNodeOrNull<Control>("HandIndex") is not Control label) continue;
+            float y = IndexLabelY - raise / Math.Max(holder.Scale.Y, 0.01f);
+            if (Math.Abs(label.Position.Y - y) > 0.5f) label.Position = new Vector2(label.Position.X, y);
+        }
+    }
+
+    /// <summary>Teammate cards currently drawn (auto-test).</summary>
+    internal static string DescribeCards() => _cardLayer == null || !GodotObject.IsInstanceValid(_cardLayer)
+        ? "no layer"
+        : $"layer visible={_cardLayer.Visible} index={_cardLayer.GetIndex()} cards=" + string.Join(", ", _shown.Select(s =>
+            $"{s.Model.Id.Entry}@({s.Holder.Position.X:0},{s.Holder.Position.Y:0}) cost={s.Holder.CardNode?.GetNodeOrNull<Label>("%EnergyLabel")?.Text}"));
+
+    /// <summary>Your own hand's Hand Card Count label offsets (auto-test).</summary>
+    internal static string DescribeIndexLabels() => NPlayerHand.Instance is NPlayerHand h
+        ? string.Join(", ", h.ActiveHolders.Select(x => x.GetNodeOrNull<Control>("HandIndex")?.Position.Y.ToString("0") ?? "?"))
+        : "no hand";
 
     internal static Button? HideButton => _hideButton != null && GodotObject.IsInstanceValid(_hideButton) ? _hideButton : null;
 

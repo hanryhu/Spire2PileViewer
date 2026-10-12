@@ -13,7 +13,7 @@ Tags are `hvN` (Pile Viewer uses `mN`). Each milestone ends in an annotated tag 
 | 1 | Dev environment for autonomous testing & review: `scripts/test-settings.ps1` (windowed test settings, applied by every launch script), `-autotestsuite hands` + native-hand probe, this tracker | done | `hv1` |
 | 2 | UI: 4th "Hand" slot (eye icon, hand count) in each strip, order draw/hand/exhaust/discard → toggles that teammate's hand view (one at a time, slot highlighted); "Hide hand" button under End Turn; F1 menu tabs (Pile Viewer / Hand Viewer) with: enable Hand Viewer, enable Hide hand button, teammate hand shadow, "% of card visible" (default 30 %). Verified 3 players | done | `hv2` |
 | 3 | Live data: text readout ("The Silent — Hand (7): Defend [1] · …", live energy costs) above your hand while a teammate's hand is viewed. Verified over the network: mutator `draw 2` / `card X` / `remove_card X` → observer saw 7→9→10→9 within ~1 s, matching the mutator's own hand exactly | done | `hv3` |
-| 4 | Hand display: teammate's cards rendered natively behind your hand in the native fan layout; Hand Card Count numbers shift up to clear them | — | `hv4` |
+| 4 | Teammate's cards drawn as native `NHandCardHolder`/`NCard`s in a layer just before `NPlayerHand.CardHolderContainer` (behind your hand), native fan layout for their hand size raised by "% of card visible" × card height, gray shadow tint; visuals refreshed 4×/s (the game only refreshes cards it finds via `NCard.FindOnTable`); your Hand Card Count labels lifted by the same amount. Verified live 7→9→10→9 re-fans | done | `hv4` |
 | 5 | Closeups: hovering a teammate card enlarges it like the native hand | — | `hv5` |
 | 6 | Accuracy: energy cost and card numbers reflect the teammate's state (Madness, Snecko Eye, Mummified Hand, Spiked Gauntlets, Strength, Dexterity, Vulnerable, Weak, Frail, enchantments like Sharp) | — | `hv6` |
 | 7 | Hide-hand: your own hand becomes a shadowed white outline so the teammate's hand is visible | — | `hv7` |
@@ -53,6 +53,9 @@ Tags are `hvN` (Pile Viewer uses `mN`). Each milestone ends in an annotated tag 
 - Teammate hand: `PileType.Hand.GetPile(player).Cards` (works on every client; live).
 
 ## Decisions & open questions
+
+- hv4: teammate cards can overlap the End Turn button at high card counts (the native hand does too); revisit in polish.
+- hv4: shadow = layer modulate `1 - 0.6 × shadow` (0 → untinted).
 
 - Hand slot order in the strip: draw | **hand** | exhaust | discard (as specified).
 - Only one teammate's hand is shown at a time; opening another closes the first.

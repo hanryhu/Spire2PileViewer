@@ -466,6 +466,7 @@ public static class AutoTest
         for (int i = 0; i < seconds; i++)
         {
             Log($"hv3: watch t+{i}s: {HandViewer.CurrentText}");
+            if (i % 3 == 0) Log($"hv4: t+{i}s: {HandViewer.DescribeCards()} | my index labels y: {HandViewer.DescribeIndexLabels()}");
             await Wait(1.0);
         }
     }
