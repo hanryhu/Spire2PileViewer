@@ -9,8 +9,8 @@ Living notes so work can resume after an interruption. Newest status first.
 | 1 | Buttons UI: 3-slot strip (draw / exhaust / discard) above each teammate, native icons + count badges | done | `m1` |
 | 2 | Load correct info: clicking a slot toggles a text popup above the strip listing that pile (grouped, name-sorted, live-updating) | done | `m2` |
 | 3 | Click opens the native `NCardPileScreen` on the teammate's pile (owner caption, toggle, empty → thought bubble, text popup as fallback); strips hide under overlays; hover bump. Verified in a real 2-player game (host + client) | done | `m3` |
-| 4 | Convenience: draggable strip (persisted offset), settings | — | `m4` |
-| 5 | Hotkeys + 3–4 players | — | `m5` |
+| 4 | Shift+drag moves all strips (saved offset); F1 settings menu (on/off, size 50–200%, background opacity, show over self, text-list mode, reset position, reset all); native-style count bump; verified live count updates over the network | done | `m4` |
+| 5 | Configurable hotkeys (native-style capture, conflicts block saving) with a per-teammate dropdown; 3–4 players | in progress | `m5` |
 
 Each milestone is one or more commits ending in an annotated tag `mN`, so testing can roll back with
 `git checkout mN` and rebuild.
@@ -69,6 +69,16 @@ Flags: `-pileviewerself` shows a strip over the local player too; `-pileviewerau
 - `AutoTest` — dev harness above.
 - `ModLog` — per-instance log file.
 
+## Verified behaviour (2-player auto-test, 2026-10-11)
+
+- Teammate's piles update live: client runs `draw 2`, `card X Discard`, `card X Exhaust` (networked) → host's
+  strip shows 5→3, 0→1, 0→1 within ~1s each.
+- Native pile screen opens on the teammate's pile on both host and client; second click toggles closed;
+  empty pile → thought bubble; strips hidden while the screen is open.
+- F1 menu controls apply immediately (scale, opacity, on/off, reset position) and persist.
+- Auto-test uses `spire2pileviewer_settings_autotest.json`, never the real settings file.
+- Window screenshots only work when the user isn't using the PC (Windows blocks focus stealing) — rely on logs.
+
 ## Decisions (made autonomously; revisit if wrong)
 
 - Slot order is draw | exhaust | discard as specified (native layout has exhaust above discard).
@@ -78,6 +88,9 @@ Flags: `-pileviewerself` shows a strip over the local player too; `-pileviewerau
   to the bottom caption in gold. Draw pile stays rarity-sorted like native (no order leak).
 - Empty exhaust pile: no native message exists (`OPEN_EMPTY_EXHAUST` missing) → English "No exhausted cards."
 - Strips hide while any capstone overlay is open (they rendered on top of the pile screen otherwise).
+- F1 is shared with BetterSpire2's menu: both open together; ours docks top-right, theirs is centered.
+- One shared drag offset for all strips (relative to each character), not per player.
+- Count bump animation only when a count grows (matches native AddCard; RemoveCard has no animation).
 
 ## Gotchas
 

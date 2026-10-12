@@ -16,6 +16,7 @@ public static class Patches
         typeof(ReturnToMainMenuPatch),
         typeof(AutoTest.MainMenuReadyPatch),
         typeof(AutoTest.LobbyReadyPatch),
+        typeof(SettingsMenu.InputPatch),
     };
 
     [HarmonyPatch(typeof(CombatManager), "SetUpCombat")]

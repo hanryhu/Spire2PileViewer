@@ -15,6 +15,7 @@ public static class ModEntry
         _initialized = true;
 
         ModLog.Init();
+        Settings.Load();
         ModLog.Info("ModEntry.Init() starting");
 
         var harmony = new Harmony("com.hanryhu.spire2pileviewer");

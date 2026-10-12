@@ -29,6 +29,10 @@ public static class PileViewer
 
     private const float SlotSize = 56f;
 
+    private static readonly Color StripBg = new(0.05f, 0.05f, 0.08f);
+
+    private static readonly Color StripBorder = new(0.8f, 0.6f, 0.2f);
+
     // Relative to the creature node's origin. BetterSpire2's incoming-damage label sits at (10, -320);
     // the strip's bottom-center goes above that.
     private static readonly Vector2 AnchorOffset = new(0f, -350f);
@@ -41,7 +45,10 @@ public static class PileViewer
     {
         public required Player Player;
         public required PanelContainer Root;
+        public required StyleBoxFlat Style;
         public readonly Label[] Counts = new Label[SlotPiles.Length];
+        public readonly Control?[] Icons = new Control?[SlotPiles.Length];
+        public readonly Control?[] Badges = new Control?[SlotPiles.Length];
 
         // Text popup listing one pile's cards (milestone 2); null when closed.
         public PanelContainer? Popup;
@@ -105,14 +112,14 @@ public static class PileViewer
     {
         NCombatRoom? room = NCombatRoom.Instance;
         CombatState? state = CombatManager.Instance.DebugOnlyGetState();
-        if (room == null || state == null || !CombatManager.Instance.IsInProgress)
+        if (room == null || state == null || !CombatManager.Instance.IsInProgress || !Settings.Enabled)
         {
             if (_widgets.Count > 0) Hide();
             return;
         }
 
         ulong localNetId = RunManager.Instance?.NetService?.NetId ?? 0;
-        bool includeSelf = IncludeSelf || (AutoTest.Enabled && state.Players.Count == 1);
+        bool includeSelf = Settings.ShowSelf || IncludeSelf || (AutoTest.Enabled && state.Players.Count == 1);
         var players = state.Players.Where(p => p != null && (includeSelf || p.NetId != localNetId)).ToList();
 
         foreach (var stale in _widgets.Keys.Where(id => players.All(p => p.NetId != id)).ToList())
@@ -148,11 +155,27 @@ public static class PileViewer
         for (int i = 0; i < SlotPiles.Length; i++)
         {
             string text = SlotPiles[i].GetPile(widget.Player).Cards.Count.ToString();
-            if (widget.Counts[i].Text != text) widget.Counts[i].Text = text;
+            if (widget.Counts[i].Text == text) continue;
+            // Native pile buttons bump the icon and count when a card arrives; do the same.
+            bool grew = int.TryParse(widget.Counts[i].Text, out int old) && int.TryParse(text, out int now) && now > old;
+            widget.Counts[i].Text = text;
+            if (grew)
+            {
+                Bump(widget.Icons[i]);
+                Bump(widget.Badges[i]);
+            }
         }
 
-        Vector2 size = widget.Root.Size;
-        widget.Root.GlobalPosition = creatureNode.GlobalPosition + AnchorOffset - new Vector2(size.X / 2f, size.Y);
+        // Settings from the F1 menu: size and background opacity.
+        if (widget.Root.Scale.X != Settings.Scale) widget.Root.Scale = new Vector2(Settings.Scale, Settings.Scale);
+        if (widget.Style.BgColor.A != Settings.Opacity)
+        {
+            widget.Style.BgColor = new Color(StripBg, Settings.Opacity);
+            widget.Style.BorderColor = new Color(StripBorder, Settings.Opacity);
+        }
+
+        Vector2 size = widget.Root.Size * Settings.Scale;
+        widget.Root.GlobalPosition = creatureNode.GlobalPosition + AnchorOffset + Settings.Offset - new Vector2(size.X / 2f, size.Y);
 
         if (widget.Popup != null && widget.PopupLabel != null && GodotObject.IsInstanceValid(widget.Popup))
         {
@@ -185,12 +208,14 @@ public static class PileViewer
         {
             Name = $"Spire2PileViewer_{player.NetId}",
             ZIndex = 100,
-            MouseFilter = Control.MouseFilterEnum.Ignore,
+            MouseFilter = Control.MouseFilterEnum.Stop,
+            TooltipText = DragHint,
         };
+        root.GuiInput += ev => HandleDragInput(root, ev);
         var style = new StyleBoxFlat
         {
-            BgColor = new Color(0.05f, 0.05f, 0.08f, 0.75f),
-            BorderColor = new Color(0.8f, 0.6f, 0.2f, 0.8f),
+            BgColor = new Color(StripBg, Settings.Opacity),
+            BorderColor = new Color(StripBorder, Settings.Opacity),
         };
         style.SetBorderWidthAll(1);
         style.SetCornerRadiusAll(6);
@@ -201,7 +226,7 @@ public static class PileViewer
         row.AddThemeConstantOverride("separation", 4);
         root.AddChild(row);
 
-        var widget = new Widget { Player = player, Root = root };
+        var widget = new Widget { Player = player, Root = root, Style = style };
         for (int i = 0; i < SlotPiles.Length; i++)
         {
             row.AddChild(CreateSlot(room, widget, SlotPiles[i], out widget.Counts[i]));
@@ -220,8 +245,9 @@ public static class PileViewer
             FocusMode = Control.FocusModeEnum.None,
             CustomMinimumSize = new Vector2(SlotSize, SlotSize),
             MouseFilter = Control.MouseFilterEnum.Stop,
-            TooltipText = PileName(pileType),
+            TooltipText = PileName(pileType) + "\n" + DragHint,
         };
+        button.GuiInput += ev => HandleDragInput(button, ev);
 
         Texture2D? texture = GetPileTexture(room, pileType);
         if (texture != null)
@@ -234,6 +260,7 @@ public static class PileViewer
                 MouseFilter = Control.MouseFilterEnum.Ignore,
             };
             button.AddChild(icon);
+            widget.Icons[Array.IndexOf(SlotPiles, pileType)] = icon;
             icon.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);
             // Hover bump like the native pile buttons (1.25x, eased back on exit).
             icon.PivotOffset = new Vector2(SlotSize, SlotSize) / 2f;
@@ -257,6 +284,9 @@ public static class PileViewer
             Position = new Vector2(SlotSize - badgeSize + 2f, SlotSize - badgeSize + 2f),
         };
         button.AddChild(badge);
+        badge.PivotOffset = new Vector2(badgeSize, badgeSize) / 2f;
+        int slot = Array.IndexOf(SlotPiles, pileType);
+        widget.Badges[slot] = badge;
 
         count = new Label
         {
@@ -281,11 +311,62 @@ public static class PileViewer
     {
         if (_widgets.Count == 0) return "no strips";
         return string.Join("; ", _widgets.Values.Select(w =>
-            $"player {w.Player.NetId}: visible={w.Root.Visible} pos={w.Root.GlobalPosition} size={w.Root.Size} counts=" +
+            $"player {w.Player.NetId}: visible={w.Root.Visible} pos={w.Root.GlobalPosition} size={w.Root.Size} scale={w.Root.Scale.X:0.##} counts=" +
             string.Join("/", w.Counts.Select(c => c.Text))));
     }
 
     /// <summary>Presses a slot on the first strip, as if clicked (auto-test only).</summary>
+    private const string DragHint = "Shift+drag to move the strips (reset in the F1 menu)";
+
+    private static bool _dragging;
+
+    private static Vector2 _dragStartMouse;
+
+    private static Vector2 _dragStartOffset;
+
+    /// <summary>
+    /// Shift+left-drag on any strip moves all strips (one shared offset, saved on release; reset from the
+    /// F1 menu). Shift events are consumed so they don't also press a slot.
+    /// </summary>
+    internal static void HandleDragInput(Control control, InputEvent ev)
+    {
+        if (ev is InputEventMouseButton mb)
+        {
+            if (mb.ButtonIndex == MouseButton.Left && mb.Pressed && mb.ShiftPressed)
+            {
+                _dragging = true;
+                _dragStartMouse = mb.GlobalPosition;
+                _dragStartOffset = Settings.Offset;
+                control.AcceptEvent();
+            }
+            else if (mb.ButtonIndex == MouseButton.Left && !mb.Pressed && _dragging)
+            {
+                _dragging = false;
+                Settings.Save();
+                ModLog.Info($"PileViewer: strip offset saved {Settings.Offset}");
+                control.AcceptEvent();
+            }
+        }
+        else if (ev is InputEventMouseMotion mm && _dragging)
+        {
+            Settings.Offset = _dragStartOffset + (mm.GlobalPosition - _dragStartMouse);
+            control.AcceptEvent();
+        }
+    }
+
+    /// <summary>Feeds a synthetic Shift+drag through the real handler (auto-test only).</summary>
+    internal static void SimulateDrag(Vector2 delta)
+    {
+        Widget? widget = _widgets.Values.FirstOrDefault();
+        if (widget == null) return;
+        Control target = widget.Root;
+        Vector2 start = target.GlobalPosition + new Vector2(5f, 5f);
+        HandleDragInput(target, new InputEventMouseButton { ButtonIndex = MouseButton.Left, Pressed = true, ShiftPressed = true, GlobalPosition = start });
+        HandleDragInput(target, new InputEventMouseMotion { GlobalPosition = start + delta / 2f, ShiftPressed = true });
+        HandleDragInput(target, new InputEventMouseMotion { GlobalPosition = start + delta, ShiftPressed = true });
+        HandleDragInput(target, new InputEventMouseButton { ButtonIndex = MouseButton.Left, Pressed = false, GlobalPosition = start + delta });
+    }
+
     internal static void SimulatePress(PileType pileType)
     {
         Widget? widget = _widgets.Values.FirstOrDefault();
@@ -322,6 +403,11 @@ public static class PileViewer
         string text = DescribePile(player, pileType);
         ModLog.Info($"PileViewer: clicked {pileType} for player {player.NetId}: " + text.Replace('\n', '|'));
         if (player.PlayerCombatState == null || !CombatManager.Instance.IsInProgress) return;
+        if (Settings.TextList)
+        {
+            ToggleTextPopup(widget, pileType, text);
+            return;
+        }
 
         try
         {
@@ -405,6 +491,14 @@ public static class PileViewer
         widget.Popup = popup;
         widget.PopupLabel = label;
         widget.PopupPile = pileType;
+    }
+
+    /// <summary>Native AddCard animation: snap to 1.25x, ease back to 1x over 0.5s.</summary>
+    private static void Bump(Control? control)
+    {
+        if (control == null || !GodotObject.IsInstanceValid(control)) return;
+        control.Scale = new Vector2(1.25f, 1.25f);
+        TweenScale(control, 1f, 0.5);
     }
 
     private static void TweenScale(Control control, float scale, double seconds)

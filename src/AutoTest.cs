@@ -82,7 +82,7 @@ public static class AutoTest
             await RunManager.Instance.EnterRoomDebug(RoomType.Monster, MapPointType.Unassigned, encounter);
             Log($"entered encounter {encounter.Id.Entry}");
 
-            await ExerciseStrips();
+            await ExerciseStrips(mutator: true, observer: true);
         }
         catch (Exception ex)
         {
@@ -125,7 +125,7 @@ public static class AutoTest
                 Log($"host enqueued '{cmd}'");
             }
 
-            await ExerciseStrips();
+            await ExerciseStrips(mutator: !isHost, observer: isHost);
         }
         catch (Exception ex)
         {
@@ -133,12 +133,16 @@ public static class AutoTest
         }
     }
 
-    private static async Task ExerciseStrips()
+    /// <param name="mutator">This instance changes its own piles (client in multiplayer, the player in solo).</param>
+    /// <param name="observer">This instance's strip watches the mutator (host in multiplayer, the player in solo).</param>
+    private static async Task ExerciseStrips(bool mutator, bool observer)
     {
+        Settings.ResetForAutoTest();
         for (int i = 0; i < 120 && !CombatManager.Instance.IsInProgress; i++) await Wait(0.25);
         Log($"combat in progress: {CombatManager.Instance.IsInProgress}");
         await Wait(3.0);
 
+        // --- Slots open the right pile (milestone 3) ---
         Log("state: " + PileViewer.DescribeState());
         foreach (PileType pile in PileViewer.SlotPiles)
         {
@@ -153,8 +157,58 @@ public static class AutoTest
         PileViewer.SimulatePress(PileType.Draw);
         await Wait(1.5);
         Log($"after Draw (toggle): {PileViewer.DescribeOpenView()}");
-        Log("state: " + PileViewer.DescribeState());
-        Log("done — screenshot window now");
+
+        // --- Live updates while the teammate's piles change ---
+        // Both instances reach this point at about the same time; the mutator changes its piles every 2s
+        // through networked console commands (the game's real CardPileCmd paths), the observer samples its strip.
+        Task watch = observer ? WatchCounts(10) : Task.CompletedTask;
+        if (mutator)
+        {
+            await Wait(1.0);
+            RunState runState = RunManager.Instance.DebugOnlyGetState()!;
+            Player me = LocalContext.GetMe(runState)!;
+            string cardId = PileType.Hand.GetPile(me).Cards.First().Id.Entry;
+            foreach (string cmd in new[] { "draw 2", $"card {cardId} Discard", $"card {cardId} Exhaust" })
+            {
+                RunManager.Instance.ActionQueueSynchronizer.RequestEnqueue(new ConsoleCmdGameAction(me, cmd, inCombat: true));
+                Log($"mutator enqueued '{cmd}'");
+                await Wait(2.0);
+            }
+        }
+        await watch;
+
+        // --- F1 menu, driven through its real controls (milestone 4) ---
+        SettingsMenu.Open();
+        await Wait(0.5);
+        SettingsMenu.ScaleSlider!.Value = 150;
+        await Wait(0.5);
+        Log($"menu: scale 150% → settings.scale={Settings.Scale} state: {PileViewer.DescribeState()}");
+        SettingsMenu.OpacitySlider!.Value = 30;
+        SettingsMenu.EnabledToggle!.ButtonPressed = false;
+        await Wait(0.5);
+        Log($"menu: disabled → {PileViewer.DescribeState()}");
+        SettingsMenu.EnabledToggle.ButtonPressed = true;
+        await Wait(0.5);
+        Log($"menu: re-enabled → {PileViewer.DescribeState()}");
+
+        // --- Shift+drag moves all strips; the menu's reset button puts them back ---
+        PileViewer.SimulateDrag(new Vector2(-40f, -60f));
+        await Wait(0.5);
+        Log($"after drag: offset={Settings.Offset} state: {PileViewer.DescribeState()}");
+        SettingsMenu.ResetPositionButton!.EmitSignal(BaseButton.SignalName.Pressed);
+        await Wait(0.5);
+        Log($"after menu reset: offset={Settings.Offset} state: {PileViewer.DescribeState()}");
+        Log($"settings file: scale={Settings.Scale} opacity={Settings.Opacity} enabled={Settings.Enabled}");
+        Log("done — screenshot window now (menu left open)");
+    }
+
+    private static async Task WatchCounts(int seconds)
+    {
+        for (int i = 0; i < seconds; i++)
+        {
+            Log($"watch t+{i}s: {PileViewer.DescribeState()}");
+            await Wait(1.0);
+        }
     }
 
     private static EncounterModel PickEncounter() =>
