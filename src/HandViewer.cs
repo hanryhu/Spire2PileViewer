@@ -3,13 +3,17 @@ using System.Collections.Generic;
 using System.Linq;
 using Godot;
 using MegaCrit.Sts2.Core.Combat;
+using System.Threading.Tasks;
 using MegaCrit.Sts2.Core.Entities.Cards;
+using MegaCrit.Sts2.Core.Entities.Creatures;
 using MegaCrit.Sts2.Core.Entities.Players;
 using MegaCrit.Sts2.Core.Helpers;
 using MegaCrit.Sts2.Core.Models;
 using MegaCrit.Sts2.Core.Nodes.Cards;
 using MegaCrit.Sts2.Core.Nodes.Cards.Holders;
+using MegaCrit.Sts2.Core.Nodes;
 using MegaCrit.Sts2.Core.Nodes.Combat;
+using MegaCrit.Sts2.Core.Nodes.HoverTips;
 using MegaCrit.Sts2.Core.Nodes.Rooms;
 using MegaCrit.Sts2.Core.Nodes.Screens.Capstones;
 using MegaCrit.Sts2.Core.Runs;
@@ -71,7 +75,7 @@ public static class HandViewer
     /// <summary>Hotkey: hide/show your own hand (only while the Hide hand feature is on).</summary>
     internal static bool ToggleHideOwnHandHotkey()
     {
-        if (!Settings.HandViewerEnabled || !Settings.HideHandButtonEnabled) return false;
+        if (!Settings.HandViewerEnabled) return false; // works with the button hidden too
         ToggleHideOwnHand();
         return true;
     }
@@ -143,7 +147,6 @@ public static class HandViewer
         if (!show)
         {
             if (_hideButton != null && GodotObject.IsInstanceValid(_hideButton)) _hideButton.Visible = false;
-            if (!Settings.HideHandButtonEnabled && HideOwnHand) HideOwnHand = false;
             return;
         }
         if (_hideButton == null || !GodotObject.IsInstanceValid(_hideButton)) _hideButton = CreateHideButton(room);
@@ -295,6 +298,53 @@ public static class HandViewer
 
     private static double _nextBubble;
 
+    // Hover delay: when the hover began; the card clicked (shows its closeup at once); native hover effects held back.
+    private static double _focusStart;
+
+    private static NHandCardHolder? _clicked;
+
+    private static bool _tipsHeld;
+
+    // Once a closeup has shown, moving straight onto a neighbouring teammate card shows its closeup with no delay.
+    // The hover "session" ends when no teammate card has been hovered for a moment.
+    private static bool _hoverActive;
+
+    private static double _lastUnfocus;
+
+    private const double HoverSessionGrace = 0.25;
+
+    // Your own card play is in progress: teammate cards ignore the mouse so they don't get in its way.
+    private static bool _inputBlocked;
+
+    // Preview-only drag of a teammate card: pressed (not yet moved), being dragged, aiming with the game's arrow.
+    private const float CardDragThreshold = 8f;
+
+    private static NHandCardHolder? _pressed;
+
+    private static Vector2 _pressMouse;
+
+    private static NHandCardHolder? _drag;
+
+    private static bool _targeting;
+
+    private static bool _multiShown;
+
+    private static NHandCardHolder? _lastCloseup;
+
+    /// <summary>Hover state for the auto-test: hovered card, closeup shown, tooltips held back, input blocked.</summary>
+    internal static string DescribeHover() =>
+        $"hovered={Name(_focused)} closeup={Name(_lastCloseup)} tipsHeld={_tipsHeld} session={_hoverActive} blocked={_inputBlocked}";
+
+    private static string Name(NHandCardHolder? h) =>
+        h != null && GodotObject.IsInstanceValid(h) ? h.CardNode?.Model?.Id.Entry ?? "?" : "none";
+
+    /// <summary>Index (in the shown teammate hand) of the first card matching, or -1 (auto-test).</summary>
+    internal static int IndexOf(Func<CardModel, bool> match) => _shown.FindIndex(s => match(s.Model));
+
+    /// <summary>Index of the matching card nearest the middle of the shown teammate hand, or -1 (auto-test).</summary>
+    internal static int MiddleIndexOf(Func<CardModel, bool> match) => Enumerable.Range(0, _shown.Count)
+        .Where(i => match(_shown[i].Model)).OrderBy(i => Math.Abs(i - (_shown.Count - 1) / 2.0)).DefaultIfEmpty(-1).First();
+
     /// <summary>Mouse position (viewport units) from the last mouse event the game received.</summary>
     internal static Vector2 LastMouse;
 
@@ -361,14 +411,23 @@ public static class HandViewer
             holder.Position = HandPosHelper.GetPosition(cards.Count, index) - new Vector2(0f, RaiseFor(cards.Count));
             holder.SetScaleInstantly(HandPosHelper.GetScale(cards.Count));
             holder.SetAngleInstantly(HandPosHelper.GetAngle(cards.Count, index));
+            if (_inputBlocked) holder.Hitbox.MouseFilter = Control.MouseFilterEnum.Ignore;
             holder.HolderFocused += h =>
             {
                 _focused = h;
+                _focusStart = Time.GetTicksMsec() / 1000.0;
                 _focusBottom = null;
-                ModLog.Info($"HandViewer: closeup {h.CardNode?.Model?.Id.Entry}");
+                ModLog.Info($"HandViewer: hover {h.CardNode?.Model?.Id.Entry}");
             };
-            holder.HolderUnfocused += h => { if (_focused == h) _focused = null; };
-            holder.HolderMouseClicked += _ => OnTeammateCardPressed();
+            holder.HolderUnfocused += h =>
+            {
+                if (_focused != h) return;
+                _focused = null;
+                _lastUnfocus = Time.GetTicksMsec() / 1000.0;
+                _tipsHeld = false;
+                if (_clicked == h) _clicked = null;
+            };
+            holder.HolderMouseClicked += h => OnTeammateCardPressed((NHandCardHolder)h);
             _shown.Add((card, holder));
         }
 
@@ -376,8 +435,14 @@ public static class HandViewer
         // A hovered card gets the native closeup (NPlayerHand.RefreshLayout): upright, full size, lifted so the
         // whole card shows, drawn above your hand (the holder sets ZIndex 1 on hover), neighbours slide aside.
         float raise = RaiseFor(cards.Count);
+        double now = Time.GetTicksMsec() / 1000.0;
+        BlockWhileYouPlay(hand);
+        UpdateDrag();
         if (_focused != null && !GodotObject.IsInstanceValid(_focused)) _focused = null;
-        int focusIndex = _focused == null ? -1 : _shown.FindIndex(s => s.Holder == _focused) is int f && f >= 0
+        NHandCardHolder? closeup = CloseupHolder(now);
+        _lastCloseup = closeup;
+        HoldBackHoverEffects(closeup);
+        int focusIndex = closeup == null || closeup == _drag ? -1 : _shown.FindIndex(s => s.Holder == closeup) is int f && f >= 0
             ? cards.ToList().IndexOf(_shown[f].Model) : -1;
         for (int i = 0; i < cards.Count; i++)
         {
@@ -385,6 +450,7 @@ public static class HandViewer
             if (entry.Holder == null || !GodotObject.IsInstanceValid(entry.Holder)) continue;
             NHandCardHolder holder = entry.Holder;
             _cardLayer.MoveChild(holder, i);
+            if (holder == _drag) continue; // the drag places it
             Vector2 position = HandPosHelper.GetPosition(cards.Count, i) - new Vector2(0f, raise);
             if (focusIndex > -1 && i != focusIndex)
             {
@@ -424,37 +490,268 @@ public static class HandViewer
                 holder.SetTargetScale(HandPosHelper.GetScale(cards.Count));
             }
         }
-        // The closeup is shown at full brightness; the rest keep the shadow tint.
+        // The closeup (and a dragged card) use the lighter "when hand hidden" shadow; the rest keep the layer's.
+        float lifted = (1f - 0.6f * Settings.HandShadowWhenHidden) / shade;
         foreach (var (_, holder) in _shown)
         {
             if (!GodotObject.IsInstanceValid(holder)) continue;
-            Color target = holder == _focused ? new Color(1f / shade, 1f / shade, 1f / shade) : Colors.White;
+            Color target = holder == closeup || holder == _drag ? new Color(lifted, lifted, lifted) : Colors.White;
             if (holder.Modulate != target) holder.Modulate = target;
         }
 
         // The game only refreshes card nodes it can find (NCard.FindOnTable) and holders inside its own hand
         // container, which excludes ours — refresh costs/numbers and the playable glow a few times a second.
-        double now = Time.GetTicksMsec() / 1000.0;
         if (now >= _nextVisualRefresh)
         {
             _nextVisualRefresh = now + 0.25;
             foreach (var (model, holder) in _shown)
             {
                 if (!GodotObject.IsInstanceValid(holder) || holder.CardNode is not NCard node) continue;
-                node.UpdateVisuals(PileType.Hand, CardPreviewMode.Normal);
+                if (holder != _drag) node.UpdateVisuals(PileType.Hand, CardPreviewMode.Normal); // keep the drag's preview
                 ApplyGlow(holder, node, TeammateGlow(model, viewed));
             }
         }
     }
 
-    /// <summary>Pressing (starting to drag) a teammate's card: your character says you can't play it.</summary>
-    private static void OnTeammateCardPressed()
+    /// <summary>Pressing a teammate's card shows its closeup at once (skips the hover delay) and may start a drag.</summary>
+    private static void OnTeammateCardPressed(NHandCardHolder holder)
     {
+        if (_inputBlocked || _drag != null) return;
+        _clicked = holder;
+        _pressed = holder;
+        _pressMouse = LastMouse;
+    }
+
+    /// <summary>
+    /// The hovered card's closeup is due: right away when clicked, otherwise after the hover delay (never when the
+    /// delay is at its maximum, "disabled").
+    /// </summary>
+    private static NHandCardHolder? CloseupHolder(double now)
+    {
+        if (_focused == null)
+        {
+            if (_hoverActive && now - _lastUnfocus > HoverSessionGrace) _hoverActive = false;
+            return null;
+        }
+        if (_inputBlocked) return null;
+        bool disabled = Settings.HoverDelay >= Settings.MaxHoverDelay;
+        if (_clicked == _focused || _drag == _focused)
+        {
+            _hoverActive = !disabled; // with hover disabled, only the clicked card shows
+            return _focused;
+        }
+        if (disabled) return null;
+        if (_hoverActive) return _focused;
+        if (now - _focusStart < Settings.HoverDelay) return null;
+        _hoverActive = true;
+        return _focused;
+    }
+
+    /// <summary>
+    /// The native hover raises the card above yours and shows its tooltips immediately; until the closeup is due,
+    /// undo both, then bring them back.
+    /// </summary>
+    private static void HoldBackHoverEffects(NHandCardHolder? closeup)
+    {
+        if (_focused != null && closeup == null && _focused != _drag)
+        {
+            if (_focused.ZIndex != 0) _focused.ZIndex = 0;
+            NHoverTipSet.Remove(_focused);
+            _tipsHeld = true;
+        }
+        else if (closeup != null && _tipsHeld && closeup != _drag)
+        {
+            _tipsHeld = false;
+            closeup.ZIndex = 1;
+            if (closeup.CardNode?.Model is CardModel model) NHoverTipSet.CreateAndShow(closeup, model.HoverTips)?.SetAlignmentForCardHolder(closeup);
+        }
+    }
+
+    private static NTargetManager? TargetManager => NRun.Instance?.GlobalUi?.TargetManager;
+
+    /// <summary>While you're playing one of your own cards, teammate cards ignore the mouse (no hover, no drag).</summary>
+    private static void BlockWhileYouPlay(NPlayerHand hand)
+    {
+        bool block = _drag == null && (hand.InCardPlay || TargetManager?.IsInSelection == true);
+        if (block == _inputBlocked) return;
+        _inputBlocked = block;
+        foreach (var (_, holder) in _shown)
+        {
+            if (GodotObject.IsInstanceValid(holder)) holder.Hitbox.MouseFilter = block ? Control.MouseFilterEnum.Ignore : Control.MouseFilterEnum.Stop;
+        }
+        if (block && _focused != null)
+        {
+            _focused.ZIndex = 0;
+            NHoverTipSet.Remove(_focused);
+            _focused = null;
+        }
+        _clicked = null;
+        _pressed = null;
+        ModLog.Info($"HandViewer: teammate cards {(block ? "ignore the mouse while you play a card" : "respond to the mouse again")}");
+    }
+
+    private static Vector2 ToLayer(Vector2 viewportPos) => _cardLayer!.GetGlobalTransformWithCanvas().AffineInverse() * viewportPos;
+
+    private static float _dragStartY;
+
+    /// <summary>
+    /// Preview-only drag, following the game's own card play (NMouseCardPlay) but never playing anything: a card
+    /// dragged into the play zone aims with the game's targeting arrow (single target) or shows its all-enemies
+    /// numbers; the card shows the numbers for whatever it points at, from the teammate's state (their Strength,
+    /// their hits this turn, ...). Letting go over a target, or in the play zone, gets the "own hand" line.
+    /// </summary>
+    private static void UpdateDrag()
+    {
+        bool leftDown = Input.IsMouseButtonPressed(MouseButton.Left);
+        if (_pressed != null && _drag == null)
+        {
+            if (!GodotObject.IsInstanceValid(_pressed) || !leftDown) _pressed = null;
+            else if ((LastMouse - _pressMouse).Length() > CardDragThreshold) StartDrag(_pressed);
+        }
+        if (_drag == null) return;
+        if (!GodotObject.IsInstanceValid(_drag) || _drag.CardNode?.Model is not CardModel card)
+        {
+            EndDrag(attempted: false);
+            return;
+        }
+        _drag.ZIndex = 2;
+        if (_targeting) return; // the game's targeting runs until you pick a target or cancel
+
+        Vector2 size = _drag.GetViewportRect().Size;
+        float playZone = size.Y * 0.75f;
+        if (_dragStartY > playZone) playZone = Mathf.Max(playZone, _dragStartY - 100f);
+        bool inPlayZone = LastMouse.Y < playZone;
+        if (Input.IsMouseButtonPressed(MouseButton.Right) || LastMouse.Y > size.Y * 0.95f)
+        {
+            EndDrag(attempted: false);
+            return;
+        }
+        if (card.TargetType is TargetType.AnyEnemy or TargetType.AnyAlly)
+        {
+            if (inPlayZone)
+            {
+                BeginTargeting(card, size);
+                return;
+            }
+            if (!leftDown)
+            {
+                EndDrag(attempted: false);
+                return;
+            }
+        }
+        else
+        {
+            if (inPlayZone != _multiShown) ShowMultiTargeting(card, inPlayZone);
+            if (!leftDown)
+            {
+                EndDrag(attempted: inPlayZone);
+                return;
+            }
+        }
+        _drag.SetTargetPosition(ToLayer(LastMouse));
+    }
+
+    private static void StartDrag(NHandCardHolder holder)
+    {
+        _drag = holder;
+        _pressed = null;
+        _dragStartY = _pressMouse.Y;
+        NHoverTipSet.Remove(holder);
+        holder.BeginDrag();
+        holder.Hitbox.MouseFilter = Control.MouseFilterEnum.Ignore; // like the game: don't block what's under the card
+        ModLog.Info($"HandViewer: preview drag {holder.CardNode?.Model?.Id.Entry}");
+    }
+
+    private static void BeginTargeting(CardModel card, Vector2 size)
+    {
+        NTargetManager? manager = TargetManager;
+        if (manager == null || _drag?.CardNode is not NCard node) return;
+        _targeting = true;
+        _drag.SetTargetPosition(ToLayer(new Vector2(size.X / 2f, size.Y - _drag.Hitbox.Size.Y * 0.75f / 2f)));
+        _drag.SetTargetScale(Vector2.One * 0.75f);
+        manager.CreatureHovered += OnCreatureHovered;
+        manager.CreatureUnhovered += OnCreatureUnhovered;
+        manager.StartTargeting(card.TargetType, node, TargetMode.ReleaseMouseToTarget,
+            () => _drag == null || LastMouse.Y > size.Y * 0.95f, null);
+        ModLog.Info($"HandViewer: preview aiming {card.Id.Entry}");
+        TaskHelper.RunSafely(AwaitTarget(manager));
+    }
+
+    private static async Task AwaitTarget(NTargetManager manager)
+    {
+        Node? picked = await manager.SelectionFinished();
+        manager.CreatureHovered -= OnCreatureHovered;
+        manager.CreatureUnhovered -= OnCreatureUnhovered;
+        if (!_targeting) return; // already ended
+        _targeting = false;
+        EndDrag(attempted: picked != null);
+    }
+
+    private static void OnCreatureHovered(NCreature creature)
+    {
+        _drag?.CardNode?.SetPreviewTarget(creature.Entity);
+        ModLog.Info($"HandViewer: preview target {creature.Entity?.Name} → {DescribeDragCard()}");
+    }
+
+    private static void OnCreatureUnhovered(NCreature _) => _drag?.CardNode?.SetPreviewTarget(null);
+
+    /// <summary>All-enemies (and self) cards in the play zone: the game's multi-target numbers and reticles.</summary>
+    private static void ShowMultiTargeting(CardModel card, bool show)
+    {
+        _multiShown = show;
+        if (_drag?.CardNode is not NCard node || NCombatRoom.Instance is not NCombatRoom room) return;
+        IReadOnlyList<Creature> enemies = card.TargetType is TargetType.AllEnemies or TargetType.RandomEnemy
+            ? card.CombatState?.HittableEnemies ?? (IReadOnlyList<Creature>)Array.Empty<Creature>()
+            : Array.Empty<Creature>();
+        var marked = enemies.ToList();
+        if (card.TargetType == TargetType.Self) marked.Add(card.Owner.Creature);
+        foreach (Creature creature in marked)
+        {
+            if (room.GetCreatureNode(creature) is NCreature c)
+            {
+                if (show) c.ShowMultiselectReticle();
+                else c.HideMultiselectReticle();
+            }
+        }
+        node.SetPreviewTarget(show && enemies.Count == 1 ? enemies[0] : null);
+        node.UpdateVisuals(PileType.Hand, show ? CardPreviewMode.MultiCreatureTargeting : CardPreviewMode.Normal);
+        ModLog.Info($"HandViewer: preview all targets {(show ? "on" : "off")} → {DescribeDragCard()}");
+    }
+
+    private static void EndDrag(bool attempted)
+    {
+        NHandCardHolder? holder = _drag;
+        if (holder == null) return;
+        if (_targeting)
+        {
+            _targeting = false;
+            TargetManager?.CancelTargeting();
+        }
+        if (_multiShown && holder.CardNode?.Model is CardModel card) ShowMultiTargeting(card, false);
+        _multiShown = false;
+        _drag = null;
+        _clicked = null;
+        if (GodotObject.IsInstanceValid(holder))
+        {
+            holder.CardNode?.SetPreviewTarget(null);
+            holder.CardNode?.UpdateVisuals(PileType.Hand, CardPreviewMode.Normal);
+            holder.ZIndex = 0;
+            holder.Hitbox.MouseFilter = _inputBlocked ? Control.MouseFilterEnum.Ignore : Control.MouseFilterEnum.Stop;
+        }
+        ModLog.Info($"HandViewer: preview drag ended (attempted play: {attempted})");
+        if (!attempted) return;
         double now = Time.GetTicksMsec() / 1000.0;
         if (now < _nextBubble) return;
         _nextBubble = now + 2.0;
         PileViewer.Say("I can only play cards from my own hand.");
     }
+
+    /// <summary>The dragged card's cost and text (auto-test).</summary>
+    internal static string DescribeDragCard() => _drag?.CardNode is NCard node ? DescribeCardNode(node) : "no drag";
+
+    internal static bool IsDragging => _drag != null;
+
+    internal static bool IsAiming => _targeting;
 
     /// <summary>
     /// hv10: the glow the teammate would see on this card in their own hand (NHandCardHolder.UpdateCard: red, gold,
@@ -511,6 +808,9 @@ public static class HandViewer
 
     private static void ClearCards()
     {
+        EndDrag(attempted: false);
+        _pressed = null;
+        _clicked = null;
         foreach (var (_, holder) in _shown)
         {
             if (GodotObject.IsInstanceValid(holder)) holder.QueueFree();

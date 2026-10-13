@@ -9,26 +9,51 @@ using MegaCrit.Sts2.Core.Nodes.CommonUi;
 
 namespace Spire2PileViewer;
 
-/// <summary>A key plus exact modifiers, e.g. "Ctrl+Shift+Z".</summary>
-public readonly record struct KeyCombo(Key Key, bool Ctrl, bool Shift, bool Alt)
+/// <summary>A key or an extra mouse button, plus exact modifiers, e.g. "Ctrl+Shift+Z" or "Shift+Mouse 4".</summary>
+public readonly record struct KeyCombo(Key Key, bool Ctrl, bool Shift, bool Alt, MouseButton Mouse = MouseButton.None)
 {
-    public override string ToString() =>
-        (Ctrl ? "Ctrl+" : "") + (Shift ? "Shift+" : "") + (Alt ? "Alt+" : "") + OS.GetKeycodeString(Key);
+    /// <summary>Mouse buttons that can be bound (not left/right/wheel, which the game needs).</summary>
+    public static bool IsBindable(MouseButton button) => button is MouseButton.Middle or MouseButton.Xbutton1 or MouseButton.Xbutton2;
 
-    public string Serialize() => (Ctrl ? "Ctrl+" : "") + (Shift ? "Shift+" : "") + (Alt ? "Alt+" : "") + Key;
+    public bool IsMouse => Mouse != MouseButton.None;
+
+    private string Mods => (Ctrl ? "Ctrl+" : "") + (Shift ? "Shift+" : "") + (Alt ? "Alt+" : "");
+
+    public override string ToString() => Mods + (Mouse switch
+    {
+        MouseButton.Middle => "Mouse 3",
+        MouseButton.Xbutton1 => "Mouse 4",
+        MouseButton.Xbutton2 => "Mouse 5",
+        MouseButton.None => OS.GetKeycodeString(Key),
+        _ => Mouse.ToString(),
+    });
+
+    public string Serialize() => Mods + (IsMouse ? "Mouse" + Mouse : Key.ToString());
 
     public static KeyCombo? Parse(string? text)
     {
         if (string.IsNullOrWhiteSpace(text)) return null;
         string[] parts = text.Split('+');
-        if (!Enum.TryParse(parts[^1], out Key key)) return null;
-        return new KeyCombo(key, parts.Contains("Ctrl"), parts.Contains("Shift"), parts.Contains("Alt"));
+        bool ctrl = parts.Contains("Ctrl"), shift = parts.Contains("Shift"), alt = parts.Contains("Alt");
+        string last = parts[^1];
+        if (last.StartsWith("Mouse") && Enum.TryParse(last["Mouse".Length..], out MouseButton button) && IsBindable(button))
+        {
+            return new KeyCombo(Key.None, ctrl, shift, alt, button);
+        }
+        if (!Enum.TryParse(last, out Key key)) return null;
+        return new KeyCombo(key, ctrl, shift, alt);
     }
 
     public static KeyCombo From(InputEventKey ev) => new(ev.Keycode, ev.CtrlPressed, ev.ShiftPressed, ev.AltPressed);
 
-    public bool Matches(InputEventKey ev) =>
-        ev.Keycode == Key && ev.CtrlPressed == Ctrl && ev.ShiftPressed == Shift && ev.AltPressed == Alt;
+    public static KeyCombo From(InputEventMouseButton ev) => new(Key.None, ev.CtrlPressed, ev.ShiftPressed, ev.AltPressed, ev.ButtonIndex);
+
+    public bool Matches(InputEvent ev) => ev switch
+    {
+        InputEventKey key => !IsMouse && key.Keycode == Key && key.CtrlPressed == Ctrl && key.ShiftPressed == Shift && key.AltPressed == Alt,
+        InputEventMouseButton mouse => IsMouse && mouse.ButtonIndex == Mouse && mouse.CtrlPressed == Ctrl && mouse.ShiftPressed == Shift && mouse.AltPressed == Alt,
+        _ => false,
+    };
 }
 
 /// <summary>
@@ -150,7 +175,7 @@ public static class Hotkeys
                         found = new Conflict($"{combo} is also {other} (Teammate {winner} gets it)", Blocking: false);
                     }
                 }
-                if (found == null && NativeAction(combo.Key) is string action)
+                if (found == null && !combo.IsMouse && NativeAction(combo.Key) is string action)
                 {
                     found = new Conflict($"{OS.GetKeycodeString(combo.Key)} is used by the game", Blocking: false);
                 }
@@ -203,7 +228,7 @@ public static class Hotkeys
     public static void ResetDraftToDefaults() => Draft = Defaults();
 
     /// <summary>If the key event matches an active binding, the (teammate, pile) it opens — the lowest teammate on duplicates.</summary>
-    public static (int teammate, PileType pile)? Match(InputEventKey ev)
+    public static (int teammate, PileType pile)? Match(InputEvent ev)
     {
         for (int t = 0; t < MaxTeammates; t++)
         {
@@ -216,7 +241,7 @@ public static class Hotkeys
     }
 
     /// <summary>The Hide/show my hand binding matches this key event.</summary>
-    public static bool MatchHideHand(InputEventKey ev) => Active[GlobalRow, 0] is KeyCombo combo && combo.Matches(ev);
+    public static bool MatchHideHand(InputEvent ev) => Active[GlobalRow, 0] is KeyCombo combo && combo.Matches(ev);
 
     public static Dictionary<string, string> Serialize()
     {

@@ -52,6 +52,7 @@ public static class SettingsMenu
     internal static HSlider? HandShadowSlider;
     internal static HSlider? HandVisibleSlider;
     internal static HSlider? HandShadowHiddenSlider;
+    internal static HSlider? HoverDelaySlider;
     private static int _selectedTab;
     internal static OptionButton? TeammatePicker;
     internal static Button? GetHotkeyButton(int slot) => _hotkeyButtons[slot];
@@ -92,6 +93,15 @@ public static class SettingsMenu
     /// <summary>Returns true if the event was consumed. Public to the auto-test so it can feed real key events.</summary>
     internal static bool HandleKey(InputEvent inputEvent)
     {
+        if (inputEvent is InputEventMouseButton { Pressed: true } mouse && KeyCombo.IsBindable(mouse.ButtonIndex))
+        {
+            if (IsCapturing)
+            {
+                SetCaptured(KeyCombo.From(mouse));
+                return true;
+            }
+            return DispatchHotkey(mouse);
+        }
         if (inputEvent is not InputEventKey { Pressed: true } key || key.IsEcho()) return false;
 
         if (IsCapturing)
@@ -105,11 +115,9 @@ public static class SettingsMenu
             }
             else
             {
-                KeyCombo? combo = key.Keycode is Key.Backspace or Key.Delete ? null : KeyCombo.From(key);
-                (int row, int col) = slot == HideHandCapture ? (Hotkeys.GlobalRow, 0) : (_selectedTeammate, slot);
-                Hotkeys.Draft[row, col] = combo;
-                ModLog.Info($"SettingsMenu: {Hotkeys.Describe(row, col)} = {combo?.ToString() ?? "unbound"}");
-                Hotkeys.TryCommitDraft(_editableTeammates);
+                _capturingSlot = slot;
+                SetCaptured(key.Keycode is Key.Backspace or Key.Delete ? null : KeyCombo.From(key));
+                return true;
             }
             RefreshHotkeys();
             return true;
@@ -120,6 +128,29 @@ public static class SettingsMenu
             Toggle();
         }
         return false; // F1 is not consumed, so BetterSpire2's F1 menu still opens too
+    }
+
+    private static void SetCaptured(KeyCombo? combo)
+    {
+        int slot = _capturingSlot!.Value;
+        _capturingSlot = null;
+        (int row, int col) = slot == HideHandCapture ? (Hotkeys.GlobalRow, 0) : (_selectedTeammate, slot);
+        Hotkeys.Draft[row, col] = combo;
+        ModLog.Info($"SettingsMenu: {Hotkeys.Describe(row, col)} = {combo?.ToString() ?? "unbound"}");
+        Hotkeys.TryCommitDraft(_editableTeammates);
+        RefreshHotkeys();
+    }
+
+    /// <summary>Runs the hotkey bound to this key or mouse button, if any. Returns whether something happened.</summary>
+    private static bool DispatchHotkey(InputEvent ev)
+    {
+        if (IsTyping() || IsCapturing) return false;
+        bool hide = Hotkeys.MatchHideHand(ev);
+        var hit = hide ? null : Hotkeys.Match(ev);
+        if (!hide && hit == null) return false;
+        return hide ? HandViewer.ToggleHideOwnHandHotkey()
+            : hit!.Value.pile == PileType.Hand ? HandViewer.ToggleTeammate(hit.Value.teammate)
+            : PileViewer.OpenTeammatePile(hit.Value.teammate, hit.Value.pile);
     }
 
     /// <summary>
@@ -137,18 +168,13 @@ public static class SettingsMenu
                 if (inputEvent is not InputEventKey { Pressed: true } key || key.IsEcho()) return;
                 Viewport? viewport = __instance.GetViewport();
                 if (viewport == null || viewport.IsInputHandled() || IsTyping() || IsCapturing) return;
-                bool hide = Hotkeys.MatchHideHand(key);
-                var hit = hide ? null : Hotkeys.Match(key);
-                if (!hide && hit == null) return;
+                if (!Hotkeys.MatchHideHand(key) && Hotkeys.Match(key) == null) return;
                 if (Hotkeys.NativeAction(key.Keycode) is string action)
                 {
                     ModLog.Info($"Hotkey {KeyCombo.From(key)} skipped: the game's '{action}' uses {key.Keycode}");
                     return;
                 }
-                bool handled = hide ? HandViewer.ToggleHideOwnHandHotkey()
-                    : hit!.Value.pile == PileType.Hand ? HandViewer.ToggleTeammate(hit.Value.teammate)
-                    : PileViewer.OpenTeammatePile(hit.Value.teammate, hit.Value.pile);
-                if (handled) viewport.SetInputAsHandled();
+                if (DispatchHotkey(key)) viewport.SetInputAsHandled();
             }
             catch (Exception ex)
             {
@@ -327,12 +353,22 @@ public static class SettingsMenu
         box.AddChild(_hotkeyStatus);
     }
 
+    internal static string VersionText => Version;
+
+    private static readonly string Version = "v" + (typeof(SettingsMenu).Assembly.GetName().Version?.ToString(3) ?? "?");
+
     private static void AddDragHint(VBoxContainer box)
     {
-        var hint = new Label { Text = "Drag to move buttons" };
-        hint.AddThemeFontSizeOverride("font_size", 12);
-        hint.AddThemeColorOverride("font_color", new Color(0.6f, 0.6f, 0.6f));
-        box.AddChild(hint);
+        var row = new HBoxContainer();
+        box.AddChild(row);
+        foreach (string text in new[] { "Drag to move buttons", Version })
+        {
+            var label = new Label { Text = text, SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
+            if (text == Version) label.HorizontalAlignment = HorizontalAlignment.Right;
+            label.AddThemeFontSizeOverride("font_size", 12);
+            label.AddThemeColorOverride("font_color", new Color(0.6f, 0.6f, 0.6f));
+            row.AddChild(label);
+        }
     }
 
     private static string Describe((int teammate, int slot) key) => Hotkeys.Describe(key.teammate, key.slot);
@@ -364,7 +400,7 @@ public static class SettingsMenu
 
         if (_capturingSlot.HasValue)
         {
-            _hotkeyStatus.Text = "Press a key (Esc cancels, Backspace clears)";
+            _hotkeyStatus.Text = "Press a key or mouse button (Esc cancels, Backspace clears)";
             _hotkeyStatus.AddThemeColorOverride("font_color", new Color(0.9f, 0.9f, 0.9f));
         }
         else if (conflicts.Any(c => c.Value.Blocking))
@@ -405,6 +441,9 @@ public static class SettingsMenu
             v => Settings.HandVisible = (float)v / 100f);
         HandShadowHiddenSlider = AddSlider(tab, "Teammate hand shadow (when hand hidden)", 0f, 100f,
             Settings.HandShadowWhenHidden * 100f, v => Settings.HandShadowWhenHidden = (float)v / 100f);
+        HoverDelaySlider = AddSlider(tab, "Hover delay", 0f, Settings.MaxHoverDelay, Settings.HoverDelay,
+            v => Settings.HoverDelay = (float)v, step: 0.05,
+            format: v => v <= 0.001 ? "instant" : v >= Settings.MaxHoverDelay - 0.001 ? "disabled" : $"{v:0.00}s");
         var hotkeyRow = new HBoxContainer();
         tab.AddChild(hotkeyRow);
         var hotkeyLabel = new Label { Text = "Hide/show hand hotkey", SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
@@ -426,7 +465,7 @@ public static class SettingsMenu
         _hideHandHotkeyStatus.AddThemeFontSizeOverride("font_size", 12);
         tab.AddChild(_hideHandHotkeyStatus);
 
-        ResetHideButtonPositionButton = AddButton(tab, "Reset \"show hand\" position", Settings.ResetHideButtonPosition);
+        ResetHideButtonPositionButton = AddButton(tab, "Reset \"hide hand\" position", Settings.ResetHideButtonPosition);
         ResetHandViewerButton = AddButton(tab, "Reset Hand Viewer settings", () =>
         {
             Settings.ResetHandViewer();
@@ -449,14 +488,16 @@ public static class SettingsMenu
         return toggle;
     }
 
-    private static HSlider AddSlider(VBoxContainer box, string text, float min, float max, float value, Action<double> apply)
+    private static HSlider AddSlider(VBoxContainer box, string text, float min, float max, float value, Action<double> apply,
+        double step = 5, Func<double, string>? format = null)
     {
+        format ??= v => $"{v:0}%";
         var row = new HBoxContainer();
         box.AddChild(row);
         var label = new Label { Text = text, SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
         label.AddThemeFontSizeOverride("font_size", 14);
         row.AddChild(label);
-        var valueLabel = new Label { Text = $"{value:0}%", CustomMinimumSize = new Vector2(48f, 0f), HorizontalAlignment = HorizontalAlignment.Right };
+        var valueLabel = new Label { Text = format(value), CustomMinimumSize = new Vector2(64f, 0f), HorizontalAlignment = HorizontalAlignment.Right };
         valueLabel.AddThemeFontSizeOverride("font_size", 14);
         row.AddChild(valueLabel);
 
@@ -464,7 +505,7 @@ public static class SettingsMenu
         {
             MinValue = min,
             MaxValue = max,
-            Step = 5,
+            Step = step,
             Value = value,
             FocusMode = Control.FocusModeEnum.None,
             CustomMinimumSize = new Vector2(PanelWidth - 28f, 20f),
@@ -472,7 +513,7 @@ public static class SettingsMenu
         slider.ValueChanged += v =>
         {
             apply(v);
-            valueLabel.Text = $"{v:0}%";
+            valueLabel.Text = format(v);
             Settings.Save();
         };
         box.AddChild(slider);

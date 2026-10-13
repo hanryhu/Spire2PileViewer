@@ -3,7 +3,9 @@
 param(
     [int]$Players = 2,
     [string]$GameDir = 'C:\Program Files (x86)\Steam\steamapps\common\Slay the Spire 2',
-    [string[]]$ExtraArgs = @()
+    [string[]]$ExtraArgs = @(),
+    # Run one side without any mods (-nomods), to check that a teammate without this mod is fine.
+    [ValidateSet('', 'host', 'client')][string]$VanillaSide = ''
 )
 
 $exe = Join-Path $GameDir 'SlayTheSpire2.exe'
@@ -11,8 +13,12 @@ $exe = Join-Path $GameDir 'SlayTheSpire2.exe'
 & (Join-Path $PSScriptRoot 'test-settings.ps1') -Mode apply -GameDir $GameDir
 if (-not $?) { exit 1 }
 
-Start-Process -FilePath $exe -WorkingDirectory $GameDir -ArgumentList (@('-fastmp', 'host_standard') + $ExtraArgs)
+$hostArgs = @('-fastmp', 'host_standard') + $ExtraArgs
+if ($VanillaSide -eq 'host') { $hostArgs += '-nomods' }
+Start-Process -FilePath $exe -WorkingDirectory $GameDir -ArgumentList $hostArgs
 Start-Sleep -Seconds 3
 for ($i = 0; $i -lt $Players - 1; $i++) {
-    Start-Process -FilePath $exe -WorkingDirectory $GameDir -ArgumentList (@('-fastmp', 'join', '-clientId', (1000 + $i)) + $ExtraArgs)
+    $clientArgs = @('-fastmp', 'join', '-clientId', (1000 + $i)) + $ExtraArgs
+    if ($VanillaSide -eq 'client' -and $i -eq 0) { $clientArgs += '-nomods' }
+    Start-Process -FilePath $exe -WorkingDirectory $GameDir -ArgumentList $clientArgs
 }

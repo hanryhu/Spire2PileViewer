@@ -27,8 +27,9 @@ public static class Settings
         public Dictionary<string, string>? hotkeys { get; set; }
         public bool handViewer { get; set; } = true;
         public bool hideHandButton { get; set; } = true;
-        public float handShadow { get; set; } = 0.5f;
-        public float handVisible { get; set; } = 0.25f;
+        public float handShadow { get; set; } = 0.85f;
+        public float handVisible { get; set; } = 0.20f;
+        public float hoverDelay { get; set; } = 0.1f;
         public float handShadowHidden { get; set; } = 0.15f;
         public float[]? hideButtonOffset { get; set; }
     }
@@ -57,7 +58,12 @@ public static class Settings
     public static bool HideHandButtonEnabled = true;
 
     /// <summary>How dark the teammate's hand is drawn (0 = no shadow, 1 = darkest).</summary>
-    public static float HandShadow = 0.5f;
+    public static float HandShadow = 0.85f;
+
+    /// <summary>Seconds a teammate card must be hovered before its closeup shows (0 = instant, MaxHoverDelay = never).</summary>
+    public static float HoverDelay = 0.1f;
+
+    public const float MaxHoverDelay = 1f;
 
     /// <summary>Drag offset of the "Hide hand" button from its default spot above the energy counter.</summary>
     public static Vector2 HideButtonOffset = Vector2.Zero;
@@ -66,7 +72,7 @@ public static class Settings
     public static float HandShadowWhenHidden = 0.15f;
 
     /// <summary>% of each teammate card visible above your own hand (0..1).</summary>
-    public static float HandVisible = 0.25f;
+    public static float HandVisible = 0.20f;
 
     /// <summary>
     /// Per-strip drag offsets relative to the default spot above the character, keyed by the player's NetId
@@ -126,6 +132,7 @@ public static class Settings
             HandShadow = Math.Clamp(dto.handShadow, 0f, 1f);
             HandVisible = Math.Clamp(dto.handVisible, 0f, 1f);
             HandShadowWhenHidden = Math.Clamp(dto.handShadowHidden, 0f, 1f);
+            HoverDelay = Math.Clamp(dto.hoverDelay, 0f, MaxHoverDelay);
             HideButtonOffset = dto.hideButtonOffset is { Length: 2 } o ? new Vector2(o[0], o[1]) : Vector2.Zero;
             ModLog.Info($"Settings loaded: enabled={Enabled} scale={Scale} opacity={Opacity} showSelf={ShowSelf} textList={TextList} offsets={DescribeOffsets()}");
         }
@@ -153,6 +160,7 @@ public static class Settings
                 handShadow = HandShadow,
                 handVisible = HandVisible,
                 handShadowHidden = HandShadowWhenHidden,
+                hoverDelay = HoverDelay,
                 hideButtonOffset = HideButtonOffset == Vector2.Zero ? null : new[] { HideButtonOffset.X, HideButtonOffset.Y },
             };
             File.WriteAllText(FilePath, JsonSerializer.Serialize(dto, new JsonSerializerOptions { WriteIndented = true }));
@@ -196,9 +204,10 @@ public static class Settings
     {
         HandViewerEnabled = true;
         HideHandButtonEnabled = true;
-        HandShadow = 0.5f;
-        HandVisible = 0.25f;
+        HandShadow = 0.85f;
+        HandVisible = 0.20f;
         HandShadowWhenHidden = 0.15f;
+        HoverDelay = 0.1f;
         HideButtonOffset = Vector2.Zero;
         Hotkeys.ResetDefaults(hand: true);
         Save();

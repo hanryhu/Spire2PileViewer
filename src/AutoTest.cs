@@ -16,6 +16,7 @@ using System.Threading.Tasks;
 using Godot;
 using HarmonyLib;
 using MegaCrit.Sts2.Core.Combat;
+using MegaCrit.Sts2.Core.Combat.History.Entries;
 using MegaCrit.Sts2.Core.Context;
 using MegaCrit.Sts2.Core.DevConsole;
 using MegaCrit.Sts2.Core.Entities.Cards;
@@ -123,6 +124,26 @@ public static class AutoTest
         Log("SHOT 5 " + HandViewer.DescribeFocus());
         await Wait(6.0);
         HandViewer.ToggleHideOwnHand();
+        await Mouse(new Vector2(960f, 300f), pressed: null);
+        await Wait(1.0);
+
+        // Aim one of their attacks at the enemy: the game's arrow, numbers from their state.
+        int attack = HandViewer.MiddleIndexOf(c => c.TargetType == TargetType.AnyEnemy);
+        Creature? enemy = CombatManager.Instance.DebugOnlyGetState()?.HittableEnemies.FirstOrDefault();
+        if (attack >= 0 && enemy != null && HandViewer.CardCenter(attack) is Vector2 card)
+        {
+            Vector2 from = card - new Vector2(0f, 155f); // high in the visible strip, clear of your own cards
+            Vector2 to = NCombatRoom.Instance!.GetCreatureNode(enemy)!.Hitbox.GetGlobalRect().GetCenter();
+            await Mouse(from, pressed: null);
+            await Wait(0.8);
+            await Mouse(from, pressed: true);
+            for (int i = 1; i <= 8; i++) await Mouse(from.Lerp(to, i / 8f), pressed: null);
+            await Wait(1.0);
+            Log("SHOT 6 " + HandViewer.DescribeDragCard());
+            await Wait(6.0);
+            await RightClick(to);
+            await Mouse(to, pressed: false);
+        }
         Log("done");
     }
 
@@ -232,7 +253,7 @@ public static class AutoTest
             if (runState == null) return;
             await Wait(5.0);
 
-            if (isHost)
+            if (isHost && Suite != "mixed") // mixed: the fight is reached by playing (no debug commands with a vanilla peer)
             {
                 Player me = LocalContext.GetMe(runState) ?? throw new InvalidOperationException("no local player");
                 string cmd = "fight " + PickEncounter().Id.Entry;
@@ -241,6 +262,7 @@ public static class AutoTest
             }
 
             if (Showcase) await RunShowcase(isHost);
+            else if (Suite == "mixed") await ExerciseMixed(isHost);
             else if (Suite == "hands") await ExerciseHands(mutator: ClientIndex == 0, observer: isHost);
             else await ExerciseStrips(mutator: ClientIndex == 0, observer: isHost);
         }
@@ -493,7 +515,221 @@ public static class AutoTest
         await ExerciseThirdPlayer(observer);
         if (observer) await ExerciseHandHotkeys();
         await ExerciseGlow(mutator, observer);
+        await ExerciseFeedback(mutator, observer);
         if (observer) await ExercisePolish();
+    }
+
+    /// <summary>
+    /// Feedback PR: hover delay (+ click and sideways shortcuts, instant/disabled ends), closeup shade, teammate
+    /// cards ignoring the mouse while you play a card, preview-only targeting of a teammate's card (single target
+    /// with their Strength/Vulnerable/hits, all-enemies), mouse-button hotkeys, version text.
+    /// </summary>
+    private static async Task ExerciseFeedback(bool mutator, bool observer)
+    {
+        await Wait(1.0);
+        string Card<T>() => ModelDb.AllCards.First(c => c is T).Id.Entry;
+        if (mutator)
+        {
+            CombatState combat = CombatManager.Instance.DebugOnlyGetState()!;
+            Player me = LocalContext.GetMe(RunManager.Instance.DebugOnlyGetState()!)!;
+            int enemy = combat.Creatures.ToList().IndexOf(combat.HittableEnemies.First());
+            string vulnerable = ModelDb.AllPowers.First(p => p is VulnerablePower).Id.Entry;
+            await Enqueue(me, $"card {Card<BeatIntoShape>()}", $"card {Card<EchoingSlash>()}", $"power {vulnerable} 2 {enemy}");
+            await Wait(2.0);
+            int hits = CombatManager.Instance.History.Entries.OfType<DamageReceivedEntry>()
+                .Count(e => e.Dealer == me.Creature && e.Receiver == combat.HittableEnemies.First() && e.HappenedThisTurn(combat));
+            Log($"feedback: mutator hits on the enemy this turn = {hits}; own hand: {string.Join(" / ", HandViewer.DumpOwnHand())}");
+            return;
+        }
+        if (!observer) return;
+
+        Player? teammate = PileViewer.Teammates().Select(t => t.player).FirstOrDefault(p => p.NetId == 1000);
+        if (teammate == null) return;
+        await WaitUntil(() => PileType.Hand.GetPile(teammate).Cards.Any(c => c is EchoingSlash)
+            && CombatManager.Instance.DebugOnlyGetState()!.HittableEnemies.First().Powers.Any(p => p is VulnerablePower), 30);
+        HandViewer.View(1000);
+        if (HandViewer.HideOwnHand) HandViewer.ToggleHideOwnHand();
+        await Wait(2.0);
+        Vector2 away = new(960f, 300f);
+        Vector2 Peek(int i) => HandViewer.CardCenter(i)!.Value - new Vector2(0f, 140f);
+
+        // Hover delay 0.5 s: nothing at 0.2 s, closeup by 0.8 s; then sideways is immediate.
+        Settings.HoverDelay = 0.5f;
+        await Mouse(away, null);
+        await Wait(0.6);
+        await Mouse(Peek(0), null);
+        await Wait(0.2);
+        Log("feedback: delay 0.2s → " + HandViewer.DescribeHover());
+        await Wait(0.6);
+        Log("feedback: delay 0.8s → " + HandViewer.DescribeHover() + " | " + HandViewer.DescribeCloseup());
+        await Mouse(Peek(1), null);
+        await Wait(0.1);
+        Log("feedback: sideways 0.1s → " + HandViewer.DescribeHover());
+        await Mouse(away, null);
+        await Wait(0.6);
+        await Mouse(Peek(2), null);
+        await Wait(0.2);
+        Log("feedback: new hover after leaving, 0.2s → " + HandViewer.DescribeHover());
+        await Mouse(away, null);
+        await Wait(0.6);
+        await Mouse(Peek(3), null);
+        await Mouse(Peek(3), true);
+        await Mouse(Peek(3), false);
+        await Wait(0.1);
+        Log("feedback: click short-circuit 0.1s → " + HandViewer.DescribeHover());
+        await Mouse(away, null);
+        await Wait(0.6);
+        Settings.HoverDelay = Settings.MaxHoverDelay;
+        await Mouse(Peek(0), null);
+        await Wait(1.0);
+        Log("feedback: disabled, 1s → " + HandViewer.DescribeHover());
+        await Mouse(away, null);
+        await Wait(0.6);
+        Settings.HoverDelay = 0f;
+        await Mouse(Peek(0), null);
+        await Wait(0.1);
+        Log("feedback: instant, 0.1s → " + HandViewer.DescribeHover());
+        await Mouse(away, null);
+        Settings.HoverDelay = 0.5f;
+        await Wait(0.6);
+
+        // Your own card play: teammate cards ignore the mouse while it lasts.
+        if (NPlayerHand.Instance?.ActiveHolders.FirstOrDefault() is NHandCardHolder own)
+        {
+            Vector2 start = own.Hitbox.GetGlobalRect().GetCenter();
+            await Mouse(start, null);
+            await Mouse(start, true);
+            for (int i = 1; i <= 6; i++) await Mouse(start + new Vector2(0f, -30f * i), null);
+            await Wait(0.3);
+            await Mouse(Peek(1), null);
+            await Wait(0.8);
+            Log($"feedback: during my card play (inCardPlay={NPlayerHand.Instance.InCardPlay}) → " + HandViewer.DescribeHover());
+            await RightClick(Peek(1));
+            await Mouse(Peek(1), false);
+            await Mouse(away, null);
+            await Wait(1.0);
+            Log("feedback: after cancelling my play → " + HandViewer.DescribeHover());
+        }
+
+        // Preview-only targeting with a teammate card: Beat Into Shape (their hits this turn) and Echoing Slash (all enemies).
+        Creature target = CombatManager.Instance.DebugOnlyGetState()!.HittableEnemies.First();
+        Vector2 enemyAt = NCombatRoom.Instance!.GetCreatureNode(target)!.Hitbox.GetGlobalRect().GetCenter();
+        foreach (var (label, match) in new (string, Func<CardModel, bool>)[] { ("BeatIntoShape", c => c is BeatIntoShape), ("EchoingSlash", c => c is EchoingSlash) })
+        {
+            int index = HandViewer.IndexOf(match);
+            if (index < 0) { Log($"feedback: {label} not in the teammate hand"); continue; }
+            Vector2 p = Peek(index);
+            await Mouse(p, null);
+            await Wait(0.8);
+            Log($"feedback: {label} before drag: {HandViewer.DescribeHover()}");
+            await Mouse(p, true);
+            for (int i = 1; i <= 8; i++) await Mouse(p.Lerp(enemyAt, i / 8f), null);
+            await Wait(0.6);
+            Log($"feedback: {label} over the enemy (dragging={HandViewer.IsDragging} aiming={HandViewer.IsAiming}): {HandViewer.DescribeDragCard()}");
+            await Mouse(enemyAt, false);
+            await Wait(0.8);
+            Log($"feedback: {label} released (dragging={HandViewer.IsDragging} aiming={HandViewer.IsAiming})");
+            await Mouse(away, null);
+            await Wait(2.2); // bubble cooldown
+        }
+
+        // Mouse-button hotkey: bind teammate 1 Draw to Mouse 4 by pressing it, then use it.
+        SettingsMenu.Open();
+        SettingsMenu.GetHotkeyButton(PileType.Discard)!.EmitSignal(BaseButton.SignalName.Pressed);
+        await MouseButtonPress(MouseButton.Xbutton1);
+        Log($"feedback: bound with Mouse 4 → teammate1 Discard={Hotkeys.Active[0, Array.IndexOf(Hotkeys.Slots, PileType.Discard)]} button='{SettingsMenu.GetHotkeyButton(PileType.Discard)!.Text}' version='{SettingsMenu.VersionText}'");
+        SettingsMenu.Close();
+        await Wait(0.5);
+        await MouseButtonPress(MouseButton.Xbutton1);
+        await Wait(1.0);
+        Log($"feedback: Mouse 4 pressed → pileScreenOpen={NCapstoneContainer.Instance?.InUse} {PileViewer.DescribeOpenView()}");
+        PileViewer.OpenTeammatePile(0, PileType.Discard); // close
+        Hotkeys.ResetDefaults(hand: false);
+        await Wait(1.0);
+
+        // Hide/show hand hotkey (H) still works with the button hidden.
+        Hotkeys.ResetDefaults(hand: true); // hv9 rebinds it to Shift+J
+        Settings.HideHandButtonEnabled = false;
+        await Wait(0.5);
+        await PressKey(Key.H);
+        await Wait(0.5);
+        Log($"feedback: button hidden, H → hideOwnHand={HandViewer.HideOwnHand} button visible={HandViewer.HideButton?.Visible}");
+        await PressKey(Key.H);
+        await Wait(0.5);
+        Log($"feedback: button hidden, H again → hideOwnHand={HandViewer.HideOwnHand}");
+        Settings.HideHandButtonEnabled = true;
+        await Wait(0.5);
+    }
+
+    /// <summary>
+    /// Mixed install (launch-mp.ps1 -VanillaSide host|client): the teammate runs the unmodded game. Once a fight
+    /// is reached by playing, the modded instance uses every feature on the teammate: strips,
+    /// a pile screen, their hand, a closeup and an aim preview. Nothing here sends anything the vanilla game
+    /// doesn't know; check both instances' godot logs for handshake warnings and state divergence.
+    /// </summary>
+    private static async Task ExerciseMixed(bool isHost)
+    {
+        // The fight is reached by playing (Neow, then a map node) — no debug commands with a vanilla peer.
+        await WaitUntil(() => CombatManager.Instance.IsInProgress, 600);
+        Log($"mixed: combat in progress: {CombatManager.Instance.IsInProgress}");
+        if (!CombatManager.Instance.IsInProgress) { Log("done"); return; }
+        Settings.ResetForAutoTest();
+        await Wait(3.0);
+        Log("mixed: strips " + PileViewer.DescribeState());
+        Log($"mixed: default view = {HandViewer.ViewedNetId?.ToString() ?? "nobody"}; cards: {HandViewer.DescribeCards()}");
+        foreach (string line in HandViewer.DumpTeammateCards()) Log("mixed: view " + line);
+        Log("mixed: glow " + HandViewer.DescribeTeammateGlow());
+
+        PileViewer.OpenTeammatePile(0, PileType.Draw);
+        await Wait(1.5);
+        Log("mixed: pile " + PileViewer.DescribeOpenView());
+        PileViewer.OpenTeammatePile(0, PileType.Draw);
+        await Wait(1.0);
+
+        int attack = HandViewer.MiddleIndexOf(c => c.TargetType == TargetType.AnyEnemy);
+        Creature? enemy = CombatManager.Instance.DebugOnlyGetState()?.HittableEnemies.FirstOrDefault();
+        if (attack >= 0 && enemy != null && HandViewer.CardCenter(attack) is Vector2 card)
+        {
+            Vector2 from = card - new Vector2(0f, 155f);
+            Vector2 to = NCombatRoom.Instance!.GetCreatureNode(enemy)!.Hitbox.GetGlobalRect().GetCenter();
+            await Mouse(from, pressed: null);
+            await Wait(1.0);
+            Log("mixed: hover " + HandViewer.DescribeHover());
+            await Mouse(from, pressed: true);
+            for (int i = 1; i <= 8; i++) await Mouse(from.Lerp(to, i / 8f), pressed: null);
+            await Wait(1.0);
+            Log($"mixed: aiming={HandViewer.IsAiming} {HandViewer.DescribeDragCard()}");
+            await Mouse(to, pressed: false);
+            await Wait(1.0);
+            Log($"mixed: released, dragging={HandViewer.IsDragging}");
+        }
+        await PressKey(Key.H);
+        await Wait(0.5);
+        Log($"mixed: H → hideOwnHand={HandViewer.HideOwnHand}");
+        await PressKey(Key.H);
+        await Wait(5.0);
+        Log($"mixed: still in combat after everything: {CombatManager.Instance.IsInProgress}");
+        Log("done");
+    }
+
+    private static async Task RightClick(Vector2 viewportPos)
+    {
+        var tree = (SceneTree)Engine.GetMainLoop();
+        Vector2 point = viewportPos * ((Vector2)DisplayServer.WindowGetSize() / tree.Root.GetVisibleRect().Size);
+        Input.ParseInputEvent(new InputEventMouseButton { ButtonIndex = MouseButton.Right, Pressed = true, Position = point, GlobalPosition = point, ButtonMask = MouseButtonMask.Right });
+        await Wait(0.1);
+        Input.ParseInputEvent(new InputEventMouseButton { ButtonIndex = MouseButton.Right, Pressed = false, Position = point, GlobalPosition = point });
+        await Wait(0.1);
+    }
+
+    private static async Task MouseButtonPress(MouseButton button)
+    {
+        var tree = (SceneTree)Engine.GetMainLoop();
+        Vector2 point = new Vector2(960f, 300f) * ((Vector2)DisplayServer.WindowGetSize() / tree.Root.GetVisibleRect().Size);
+        Input.ParseInputEvent(new InputEventMouseButton { ButtonIndex = button, Pressed = true, Position = point, GlobalPosition = point });
+        await Wait(0.1);
+        Input.ParseInputEvent(new InputEventMouseButton { ButtonIndex = button, Pressed = false, Position = point, GlobalPosition = point });
+        await Wait(0.2);
     }
 
     /// <summary>
