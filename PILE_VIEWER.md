@@ -28,23 +28,33 @@ Each milestone is one or more commits ending in an annotated tag `mN`, so testin
 
 ## Dev loop
 
-1. `dotnet build src/Spire2PileViewer.csproj` (uses `%LOCALAPPDATA%\dotnet9`, `DOTNET_ROOT` set).
-2. Game closed → `scripts/dev-autotest.ps1`: installs to `<game>\mods\Spire2PileViewer\` and launches a solo
-   game with `-pileviewerautotest`.
-3. `AutoTest` (inert without the flag) starts an unsaved Ironclad run from the main menu, jumps into a weak
-   monster fight via `RunManager.EnterRoomDebug`, logs `PileViewer.DescribeState()`, simulates a press on
-   each slot, then logs `AutoTest: done`.
-4. Check `%APPDATA%\SlayTheSpire2\spire2pileviewer_log.txt` and take a window screenshot.
-5. Multiplayer (the real target — always verify here): game closed → `scripts/dev-autotest-mp.ps1`.
-   Host + client launch with `-fastmp` + `-pileviewerautotest`; in the lobby each picks a character
-   (host Ironclad, client Silent) via `StartRunLobby.SetLocalCharacter` + `SetReady(true)`; the host enqueues
-   a networked `fight <encounter>` (`ActionQueueSynchronizer.RequestEnqueue(new ConsoleCmdGameAction(me, cmd,
-   false))`) so both enter combat; each instance presses its teammate's slots and logs
-   `PileViewer.DescribeOpenView()`. Per-instance logs: `spire2pileviewer_host_log.txt`,
-   `spire2pileviewer_1000_log.txt`. Screenshot both windows (scratchpad `waitmp.sh`).
-6. Manual: `scripts/launch-mp.ps1 -Players 2` (no autotest) and click through.
+`scripts/dev-autotest-mp.ps1 [-Suite fast|full] [-Players N]` (game closed) is the one command: builds (when
+the .NET 9 SDK is reachable), installs, launches a host + clients with `-fastmp` + `-pileviewerautotest`, waits,
+prints every `CHECK PASS|FAIL`, compares the cross-instance dumps, closes the games, restores normal settings
+and exits non-zero on failure.
 
-Flags: `-pileviewerself` shows a strip over the local player too; `-pileviewerautotest` implies it in solo;
+- `fast` (default, ~30 s incl. launch): every feature once — strips (live counts, pile screen, drag, F1
+  size/off/reset), hotkeys (conflict blocking, mouse button, console precedence), Hand Viewer (default view,
+  every card + cost drawn, Hide hand + H, own strip's eye, hover delay/sideways/click, closeup position and
+  shade, your card play blocks hover, aim preview with Vulnerable, nothing gets played).
+- `full` (≤ 3 min — run before pushes): fast + the host's view vs the teammate's own screen (cost/number
+  changers, glow after End Turn / undo / spent energy), Beat Into Shape forge from the teammate's hits,
+  Echoing Slash all-enemies preview, hotkey regressions (game key warning, a key moved off the game, absent
+  teammate duplicate, hand hotkey), hover delay ends, 3rd player (`-Players 3`), whose hand carries over to
+  the next fight.
+- `mixed -VanillaSide host|client`: one side launched `-nomods`; reach the first fight by playing, then the
+  modded side uses every feature on the unmodded teammate.
+
+Roles: host = observer (all checks); first client (1000) = mutator. Lock-step without a channel of our own: the
+host raises its gold by 1 to ask for step k, the mutator raises its own gold by 1 when step k is done (gold is
+synced game state). The mutator logs `REFn` dumps from its own screen, the host `VIEWn`; the runner compares
+them. Party order follows join order, so checks use the mutator's own hotkey row.
+Logs: `%APPDATA%\SlayTheSpire2\spire2pileviewer_{host,1000,…}_log.txt`; game console output goes to
+`%TEMP%\sts2_<n>.out` during automated runs.
+
+Manual: `scripts/launch-mp.ps1 -Players 2` (no autotest) and click through.
+
+Flags: `-pileviewerself` shows a strip over the local player too;
 `-pileviewerplayers N`; `-pileviewershowcase` stages README screenshots (`scripts/dev-showcase.ps1`; the first
 client logs SHOT 1/2/3 — disable BetterSpire2 in settings.save mod_list first for clean shots).
 
