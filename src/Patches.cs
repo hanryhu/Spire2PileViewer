@@ -14,7 +14,6 @@ public static class Patches
         typeof(CombatWinPatch),
         typeof(CombatLosePatch),
         typeof(ReturnToMainMenuPatch),
-        typeof(AutoTest.MainMenuReadyPatch),
         typeof(AutoTest.LobbyReadyPatch),
         typeof(SettingsMenu.InputPatch),
         typeof(SettingsMenu.HotkeyDispatchPatch),

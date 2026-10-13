@@ -7,7 +7,7 @@
         <TargetFramework>net9.0</TargetFramework>
         <ImplicitUsings>disable</ImplicitUsings>
         <Nullable>enable</Nullable>
-        <Version>0.2.0</Version>
+        <Version>0.3.0</Version>
 
         <!-- Set this to your Slay the Spire 2 install directory -->
         <Sts2Dir>C:\Program Files (x86)\Steam\steamapps\common\Slay the Spire 2</Sts2Dir>

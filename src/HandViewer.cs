@@ -751,6 +751,33 @@ public static class HandViewer
 
     internal static bool IsDragging => _drag != null;
 
+    /// <summary>Teammate cards shown, in hand order: model, the cost label drawn on the card, its glow (auto-test).</summary>
+    internal static List<(CardModel Model, string Cost, string Glow)> ShownCards()
+    {
+        if (_shownFor is not ulong id || PileViewer.Teammates().FirstOrDefault(t => t.player.NetId == id).player is not Player p) return new();
+        return PileType.Hand.GetPile(p).Cards.Select(c => _shown.FirstOrDefault(s => s.Model == c))
+            .Where(s => s.Holder != null && GodotObject.IsInstanceValid(s.Holder))
+            .Select(s => (s.Model, s.Holder.CardNode?.GetNodeOrNull<Label>("%EnergyLabel")?.Text ?? "?", DescribeGlow(s.Holder.CardNode))).ToList();
+    }
+
+    internal static string? HoveredId => _focused != null && GodotObject.IsInstanceValid(_focused) ? _focused.CardNode?.Model?.Id.Entry : null;
+
+    internal static string? CloseupId => _lastCloseup != null && GodotObject.IsInstanceValid(_lastCloseup) ? _lastCloseup.CardNode?.Model?.Id.Entry : null;
+
+    internal static bool InputBlocked => _inputBlocked;
+
+    /// <summary>Closeup's bottom edge and the top edge of your cards under it (viewport units), and its brightness (auto-test).</summary>
+    internal static (float Bottom, float OwnTop, float Modulate)? CloseupGeometry()
+    {
+        if (_lastCloseup == null || !GodotObject.IsInstanceValid(_lastCloseup)) return null;
+        // Your cards that are actually under the closeup (overlap it horizontally).
+        Rect2 rect = _lastCloseup.Hitbox.GetGlobalRect();
+        float ownTop = NPlayerHand.Instance?.ActiveHolders.Select(h => h.Hitbox.GetGlobalRect())
+            .Where(r => r.End.X > rect.Position.X && r.Position.X < rect.End.X)
+            .Select(r => r.Position.Y).DefaultIfEmpty(float.NaN).Min() ?? float.NaN;
+        return (rect.End.Y, ownTop, _lastCloseup.Modulate.R);
+    }
+
     internal static bool IsAiming => _targeting;
 
     /// <summary>
@@ -864,6 +891,14 @@ public static class HandViewer
         : new List<string>();
 
     /// <summary>Global center of teammate card #index, e.g. to point the mouse at it (auto-test).</summary>
+    /// <summary>Middle of the part of a teammate card that peeks out above your hand (auto-test mouse target).</summary>
+    internal static Vector2? PeekPoint(int index)
+    {
+        if (index >= _shown.Count || !GodotObject.IsInstanceValid(_shown[index].Holder)) return null;
+        Rect2 rect = _shown[index].Holder.Hitbox.GetGlobalRect();
+        return new Vector2(rect.GetCenter().X, rect.Position.Y + rect.Size.Y * Mathf.Max(Settings.HandVisible, 0.1f) * 0.5f);
+    }
+
     internal static Vector2? CardCenter(int index) =>
         index < _shown.Count && GodotObject.IsInstanceValid(_shown[index].Holder)
             ? _shown[index].Holder.Hitbox.GetGlobalRect().GetCenter() : null;

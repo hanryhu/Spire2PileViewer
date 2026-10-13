@@ -113,12 +113,22 @@ public static class PileViewer
         HandViewer.ResetRun();
     }
 
+    /// <summary>How many thought bubbles the mod has shown (auto-test).</summary>
+    internal static int SaidCount;
+
+    /// <summary>The count text on each slot of a player's strip, or null without a strip (auto-test).</summary>
+    internal static string[]? StripCounts(ulong netId) =>
+        _widgets.TryGetValue(netId, out var w) && GodotObject.IsInstanceValid(w.Root) && w.Root.Visible ? w.Counts.Select(c => c.Text).ToArray() : null;
+
+    internal static Vector2 StripScale(ulong netId) => _widgets.TryGetValue(netId, out var w) ? w.Root.Scale : Vector2.Zero;
+
     /// <summary>A thought bubble over your own character (like the game's "empty pile" messages).</summary>
     internal static void Say(string message)
     {
         CombatState? state = CombatManager.Instance.DebugOnlyGetState();
         if (state == null || LocalContext.GetMe(state) is not Player me) return;
         ModLog.Info($"PileViewer: says '{message}'");
+        SaidCount++;
         NCombatRoom.Instance?.CombatVfxContainer.AddChildSafely(NThoughtBubbleVfx.Create(message, me.Creature, 2.0));
     }
 
