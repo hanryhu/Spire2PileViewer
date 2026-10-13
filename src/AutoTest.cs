@@ -253,7 +253,7 @@ public static class AutoTest
             if (runState == null) return;
             await Wait(5.0);
 
-            if (isHost)
+            if (isHost && Suite != "mixed") // mixed: the fight is reached by playing (no debug commands with a vanilla peer)
             {
                 Player me = LocalContext.GetMe(runState) ?? throw new InvalidOperationException("no local player");
                 string cmd = "fight " + PickEncounter().Id.Entry;
@@ -262,6 +262,7 @@ public static class AutoTest
             }
 
             if (Showcase) await RunShowcase(isHost);
+            else if (Suite == "mixed") await ExerciseMixed(isHost);
             else if (Suite == "hands") await ExerciseHands(mutator: ClientIndex == 0, observer: isHost);
             else await ExerciseStrips(mutator: ClientIndex == 0, observer: isHost);
         }
@@ -658,6 +659,57 @@ public static class AutoTest
         Log($"feedback: button hidden, H again → hideOwnHand={HandViewer.HideOwnHand}");
         Settings.HideHandButtonEnabled = true;
         await Wait(0.5);
+    }
+
+    /// <summary>
+    /// Mixed install (launch-mp.ps1 -VanillaSide host|client): the teammate runs the unmodded game. Once a fight
+    /// is reached by playing, the modded instance uses every feature on the teammate: strips,
+    /// a pile screen, their hand, a closeup and an aim preview. Nothing here sends anything the vanilla game
+    /// doesn't know; check both instances' godot logs for handshake warnings and state divergence.
+    /// </summary>
+    private static async Task ExerciseMixed(bool isHost)
+    {
+        // The fight is reached by playing (Neow, then a map node) — no debug commands with a vanilla peer.
+        await WaitUntil(() => CombatManager.Instance.IsInProgress, 600);
+        Log($"mixed: combat in progress: {CombatManager.Instance.IsInProgress}");
+        if (!CombatManager.Instance.IsInProgress) { Log("done"); return; }
+        Settings.ResetForAutoTest();
+        await Wait(3.0);
+        Log("mixed: strips " + PileViewer.DescribeState());
+        Log($"mixed: default view = {HandViewer.ViewedNetId?.ToString() ?? "nobody"}; cards: {HandViewer.DescribeCards()}");
+        foreach (string line in HandViewer.DumpTeammateCards()) Log("mixed: view " + line);
+        Log("mixed: glow " + HandViewer.DescribeTeammateGlow());
+
+        PileViewer.OpenTeammatePile(0, PileType.Draw);
+        await Wait(1.5);
+        Log("mixed: pile " + PileViewer.DescribeOpenView());
+        PileViewer.OpenTeammatePile(0, PileType.Draw);
+        await Wait(1.0);
+
+        int attack = HandViewer.MiddleIndexOf(c => c.TargetType == TargetType.AnyEnemy);
+        Creature? enemy = CombatManager.Instance.DebugOnlyGetState()?.HittableEnemies.FirstOrDefault();
+        if (attack >= 0 && enemy != null && HandViewer.CardCenter(attack) is Vector2 card)
+        {
+            Vector2 from = card - new Vector2(0f, 155f);
+            Vector2 to = NCombatRoom.Instance!.GetCreatureNode(enemy)!.Hitbox.GetGlobalRect().GetCenter();
+            await Mouse(from, pressed: null);
+            await Wait(1.0);
+            Log("mixed: hover " + HandViewer.DescribeHover());
+            await Mouse(from, pressed: true);
+            for (int i = 1; i <= 8; i++) await Mouse(from.Lerp(to, i / 8f), pressed: null);
+            await Wait(1.0);
+            Log($"mixed: aiming={HandViewer.IsAiming} {HandViewer.DescribeDragCard()}");
+            await Mouse(to, pressed: false);
+            await Wait(1.0);
+            Log($"mixed: released, dragging={HandViewer.IsDragging}");
+        }
+        await PressKey(Key.H);
+        await Wait(0.5);
+        Log($"mixed: H → hideOwnHand={HandViewer.HideOwnHand}");
+        await PressKey(Key.H);
+        await Wait(5.0);
+        Log($"mixed: still in combat after everything: {CombatManager.Instance.IsInProgress}");
+        Log("done");
     }
 
     private static async Task RightClick(Vector2 viewportPos)

@@ -2,6 +2,8 @@
 
 Slay the Spire 2 co-op mod: see your teammates' draw, exhaust, and discard piles, and their hand.
 
+Cosmetic only: teammates don't need the mod, and nothing you do with it is sent to them.
+
 ![Strips above each teammate](assets/strips.png)
 
 - Each teammate gets a strip with live pile counts. **Click** a pile to open it.
