@@ -1,4 +1,5 @@
 using System;
+using MegaCrit.Sts2.Core.Localization.DynamicVars;
 using MegaCrit.Sts2.Core.Models.Enchantments;
 using MegaCrit.Sts2.Core.Models.Relics;
 using MegaCrit.Sts2.Core.Models.Powers;
@@ -38,16 +39,10 @@ using MegaCrit.Sts2.Core.Runs;
 namespace Spire2PileViewer;
 
 /// <summary>
-/// Development-only smoke test, inert unless the game is launched with -pileviewerautotest.
-///
-/// Solo (no -fastmp): from the main menu, starts an unsaved run, jumps into a weak fight, and shows a
-/// strip over the local player.
-/// Multiplayer (with -fastmp host_standard / join): in the lobby both players pick a character and ready
-/// up automatically (host waits for the client), the host then sends a networked "fight" so the whole
-/// party enters combat, and each instance exercises its teammate's strip.
-///
-/// Every step is logged as "AutoTest: ..." ending in "AutoTest: done", so the mod can be checked from
-/// the per-instance log files and window screenshots without anyone clicking through the game.
+/// Development-only multiplayer test, inert unless the game is launched with -pileviewerautotest and -fastmp
+/// (scripts/dev-autotest-mp.ps1). In the lobby everyone picks a character and readies up, the host sends a
+/// networked "fight", then the suite runs (see RunSuite). Every step is logged as "AutoTest: ...", checks as
+/// "AutoTest: CHECK PASS|FAIL ...", ending in "AutoTest: RESULT ..." and "AutoTest: done".
 /// </summary>
 public static class AutoTest
 {
@@ -156,10 +151,11 @@ public static class AutoTest
     private static readonly int ClientIndex = ArgValue("-clientId", 999) - 1000;
 
     /// <summary>
-    /// -autotestsuite piles|hands: which feature to exercise (default piles = the Pile Viewer checks).
-    /// "hands" is the Hand Viewer suite (see HAND_VIEWER.md); it grows with each Hand Viewer milestone.
+    /// -autotestsuite fast|full|mixed: fast (default, ~30 s) checks every feature once; full (up to 3 min, before
+    /// pushes) adds cross-instance accuracy, glow, regressions and a second fight; mixed is for a teammate
+    /// without the mod (launch-mp.ps1 -VanillaSide).
     /// </summary>
-    private static readonly string Suite = ArgString("-autotestsuite", "piles");
+    private static readonly string Suite = ArgString("-autotestsuite", "fast");
 
     private static string ArgString(string name, string fallback)
     {
@@ -177,17 +173,6 @@ public static class AutoTest
 
     private static bool _started;
 
-    [HarmonyPatch(typeof(NMainMenu), "_Ready")]
-    public static class MainMenuReadyPatch
-    {
-        private static void Postfix()
-        {
-            if (!Enabled || Multiplayer || _started) return;
-            _started = true;
-            TaskHelper.RunSafely(RunSolo());
-        }
-    }
-
     [HarmonyPatch(typeof(NCharacterSelectScreen), "AfterInitialized")]
     public static class LobbyReadyPatch
     {
@@ -200,58 +185,30 @@ public static class AutoTest
         }
     }
 
-    private static async Task RunSolo()
-    {
-        try
-        {
-            Log("solo: starting");
-            await Wait(2.0);
-            CharacterModel character = ModelDb.AllCharacters.First();
-            await NGame.Instance!.StartNewSingleplayerRun(character, shouldSave: false, ActModel.GetDefaultList().ToList(),
-                Array.Empty<ModifierModel>(), SeedHelper.GetRandomSeed(), GameMode.Standard);
-            Log($"run started as {character.Id.Entry}");
-            await Wait(3.0);
-
-            EncounterModel encounter = PickEncounter().ToMutable();
-            encounter.DebugRandomizeRng();
-            await RunManager.Instance.EnterRoomDebug(RoomType.Monster, MapPointType.Unassigned, encounter);
-            Log($"entered encounter {encounter.Id.Entry}");
-
-            if (Suite == "hands") await ExerciseHands(mutator: true, observer: true);
-            else await ExerciseStrips(mutator: true, observer: true);
-        }
-        catch (Exception ex)
-        {
-            ModLog.Error("AutoTest", ex);
-        }
-    }
-
     private static async Task RunMultiplayer(StartRunLobby lobby)
     {
         try
         {
             bool isHost = lobby.NetService.Type == NetGameType.Host;
             Log($"multiplayer: in lobby as {(isHost ? "host" : "client")} (netId {lobby.NetService.NetId})");
-            await Wait(2.0);
-
             if (isHost)
             {
-                for (int i = 0; i < 240 && lobby.Players.Count < ExpectedPlayers; i++) await Wait(0.5);
+                await WaitUntil(() => lobby.Players.Count >= ExpectedPlayers, 120);
                 Log($"lobby players: {lobby.Players.Count}");
-                await Wait(2.0); // let the clients pick and ready first
             }
-
+            await Wait(0.3);
             CharacterModel character = ModelDb.AllCharacters.ElementAt(isHost ? 0 : 1 + ClientIndex);
             lobby.SetLocalCharacter(character);
-            await Wait(1.0);
+            await Wait(0.3);
             lobby.SetReady(ready: true);
             Log($"ready as {character.Id.Entry}");
 
-            for (int i = 0; i < 240 && RunManager.Instance.DebugOnlyGetState() == null; i++) await Wait(0.5);
+            await WaitUntil(() => RunManager.Instance.DebugOnlyGetState() != null, 120);
             RunState? runState = RunManager.Instance.DebugOnlyGetState();
             Log($"run in progress: {runState != null} ({runState?.Players.Count ?? 0} players)");
             if (runState == null) return;
-            await Wait(5.0);
+            await WaitUntil(() => LocalContext.GetMe(runState) != null, 30);
+            await Wait(0.5);
 
             if (isHost && Suite != "mixed") // mixed: the fight is reached by playing (no debug commands with a vanilla peer)
             {
@@ -263,402 +220,13 @@ public static class AutoTest
 
             if (Showcase) await RunShowcase(isHost);
             else if (Suite == "mixed") await ExerciseMixed(isHost);
-            else if (Suite == "hands") await ExerciseHands(mutator: ClientIndex == 0, observer: isHost);
-            else await ExerciseStrips(mutator: ClientIndex == 0, observer: isHost);
+            else await RunSuite(isHost);
         }
         catch (Exception ex)
         {
             ModLog.Error("AutoTest", ex);
+            Log("done"); // let the runner finish instead of waiting for the timeout
         }
-    }
-
-    /// <param name="mutator">This instance changes its own piles (client in multiplayer, the player in solo).</param>
-    /// <param name="observer">This instance's strip watches the mutator (host in multiplayer, the player in solo).</param>
-    private static async Task ExerciseStrips(bool mutator, bool observer)
-    {
-        Settings.ResetForAutoTest();
-        for (int i = 0; i < 120 && !CombatManager.Instance.IsInProgress; i++) await Wait(0.25);
-        Log($"combat in progress: {CombatManager.Instance.IsInProgress}");
-        await Wait(3.0);
-
-        // --- Slots open the right pile (milestone 3) ---
-        Log("state: " + PileViewer.DescribeState());
-        foreach (PileType pile in PileViewer.SlotPiles)
-        {
-            PileViewer.SimulatePress(pile);
-            await Wait(1.5);
-            Log($"after {pile}: {PileViewer.DescribeOpenView()}");
-        }
-        // The empty Exhaust/Discard presses closed the screen, so: open Draw, then press Draw again to toggle it closed.
-        PileViewer.SimulatePress(PileType.Draw);
-        await Wait(1.5);
-        Log($"after Draw (open): {PileViewer.DescribeOpenView()}");
-        PileViewer.SimulatePress(PileType.Draw);
-        await Wait(1.5);
-        Log($"after Draw (toggle): {PileViewer.DescribeOpenView()}");
-
-        // --- Live updates while the teammate's piles change ---
-        // Both instances reach this point at about the same time; the mutator changes its piles every 2s
-        // through networked console commands (the game's real CardPileCmd paths), the observer samples its strip.
-        Task watch = observer ? WatchCounts(10) : Task.CompletedTask;
-        if (mutator)
-        {
-            await Wait(1.0);
-            RunState runState = RunManager.Instance.DebugOnlyGetState()!;
-            Player me = LocalContext.GetMe(runState)!;
-            string cardId = PileType.Hand.GetPile(me).Cards.First().Id.Entry;
-            foreach (string cmd in new[] { "draw 2", $"card {cardId} Discard", $"card {cardId} Exhaust" })
-            {
-                RunManager.Instance.ActionQueueSynchronizer.RequestEnqueue(new ConsoleCmdGameAction(me, cmd, inCombat: true));
-                Log($"mutator enqueued '{cmd}'");
-                await Wait(2.0);
-            }
-        }
-        await watch;
-
-        // --- F1 menu, driven through its real controls (milestone 4) ---
-        SettingsMenu.Open();
-        await Wait(0.5);
-        SettingsMenu.ScaleSlider!.Value = 150;
-        await Wait(0.5);
-        Log($"menu: scale 150% → settings.scale={Settings.Scale} state: {PileViewer.DescribeState()}");
-        SettingsMenu.OpacitySlider!.Value = 30;
-        SettingsMenu.EnabledToggle!.ButtonPressed = false;
-        await Wait(0.5);
-        Log($"menu: disabled → {PileViewer.DescribeState()}");
-        SettingsMenu.EnabledToggle.ButtonPressed = true;
-        await Wait(0.5);
-        Log($"menu: re-enabled → {PileViewer.DescribeState()}");
-
-        // --- Shift+drag moves only that strip (others stay put); the menu's reset button puts them all back ---
-        Log($"before drag: state: {PileViewer.DescribeState()}");
-        PileViewer.SimulateDrag(new Vector2(-40f, -60f));
-        await Wait(0.5);
-        Log($"after drag (first strip only): offsets={Settings.DescribeOffsets()} state: {PileViewer.DescribeState()}");
-        SettingsMenu.ResetPositionButton!.EmitSignal(BaseButton.SignalName.Pressed);
-        await Wait(0.5);
-        Log($"after menu reset: offsets={Settings.DescribeOffsets()} state: {PileViewer.DescribeState()}");
-        Log($"settings file: scale={Settings.Scale} opacity={Settings.Opacity} enabled={Settings.Enabled}");
-
-        await ExerciseHotkeys();
-        Log("done — screenshot window now (menu left open)");
-    }
-
-    /// <summary>Milestone 5: pile hotkeys and native-style rebinding with conflict blocking, through real key events.</summary>
-    private static async Task ExerciseHotkeys()
-    {
-        var teammates = PileViewer.Teammates();
-        Log($"hotkeys: teammates = {string.Join(", ", teammates.Select(t => $"P{t.number} {t.player.Character.Id.Entry} ({t.player.NetId})"))}");
-        Log($"hotkeys: picker items = {string.Join(" | ", Enumerable.Range(0, SettingsMenu.TeammatePicker!.ItemCount).Select(i => SettingsMenu.TeammatePicker.GetItemText(i)))}");
-
-        await PressKey(Key.Z, shift: true);
-        Log($"hotkeys: Shift+Z → {PileViewer.DescribeOpenView()}");
-        await PressKey(Key.Z, shift: true);
-        Log($"hotkeys: Shift+Z again → {PileViewer.DescribeOpenView()}");
-        if (teammates.Count >= 2)
-        {
-            await PressKey(Key.Z, ctrl: true);
-            Log($"hotkeys: Ctrl+Z (teammate 2 draw) → {PileViewer.DescribeOpenView()}");
-            await PressKey(Key.Z, ctrl: true);
-        }
-
-        // Rebind teammate 1's draw to Shift+C (already discard) → conflict, nothing saved.
-        SettingsMenu.TeammatePicker.Select(0);
-        SettingsMenu.GetHotkeyButton(0)!.EmitSignal(BaseButton.SignalName.Pressed);
-        await PressKey(Key.C, shift: true);
-        Log($"hotkeys: draw→Shift+C: button='{SettingsMenu.GetHotkeyButton(0)!.Text}' status='{SettingsMenu.HotkeyStatus}' active draw={Hotkeys.Active[0, 0]}");
-        // Rebind discard to Shift+B → conflict resolved → saved.
-        SettingsMenu.GetHotkeyButton(PileType.Discard)!.EmitSignal(BaseButton.SignalName.Pressed);
-        await PressKey(Key.B, shift: true);
-        Log($"hotkeys: discard→Shift+B: status='{SettingsMenu.HotkeyStatus}' active draw={Hotkeys.Active[0, 0]} discard={Hotkeys.Active[0, Array.IndexOf(Hotkeys.Slots, PileType.Discard)]}");
-        SettingsMenu.Close();
-        await PressKey(Key.C, shift: true);
-        Log($"hotkeys: Shift+C (new draw binding) → {PileViewer.DescribeOpenView()}");
-        await PressKey(Key.C, shift: true);
-        Log($"hotkeys: Shift+C again → {PileViewer.DescribeOpenView()}");
-
-        // Milestone 6: hotkeys rank below the game.
-        // (a) Dev console open → our hotkeys stay quiet.
-        NDevConsole.Instance.ShowConsole();
-        await Wait(0.5);
-        await PressKey(Key.C, shift: true);
-        Log($"hotkeys: Shift+C with console open → {PileViewer.DescribeOpenView()}");
-        NDevConsole.Instance.HideConsole();
-        await Wait(0.5);
-
-        // (b) A binding on a key the game uses (S = discard pile) saves with a warning, and the game keeps the key.
-        SettingsMenu.Open();
-        SettingsMenu.TeammatePicker!.Select(0);
-        SettingsMenu.GetHotkeyButton(0)!.EmitSignal(BaseButton.SignalName.Pressed);
-        await PressKey(Key.S, shift: true);
-        Log($"hotkeys: draw→Shift+S: status='{SettingsMenu.HotkeyStatus}' active draw={Hotkeys.Active[0, 0]}");
-        SettingsMenu.Close();
-        await PressKey(Key.S, shift: true);
-        Log($"hotkeys: Shift+S → {PileViewer.DescribeOpenView()} (game's own pile expected, not the teammate's)");
-        if (PileViewer.DescribeOpenView() != "nothing open") await PressKey(Key.Escape);
-
-        // (b2) Regression (user report): move the game's D binding to another key (as the game's keybinding
-        // screen does) — D must then count as free: saved without a game-key warning, and it fires. D is still
-        // bound in the *inactive* keyboard-only map on this profile, which used to wrongly block it.
-        // Edits the in-memory map only (the game's ModifyMKbKey would also save the player's keybindings).
-        var mkb = (Dictionary<StringName, Key>)Traverse.Create(NInputManager.Instance!).Field("_mKbInputMap").GetValue();
-        var movedOffD = mkb.Where(kv => kv.Value == Key.D).Select(kv => kv.Key).ToList();
-        foreach (StringName action in movedOffD) mkb[action] = Key.P;
-        Log($"hotkeys: moved game actions off D → P: {string.Join(", ", movedOffD)}; native(D)={Hotkeys.NativeAction(Key.D) ?? "none"}");
-        SettingsMenu.Open();
-        SettingsMenu.GetHotkeyButton(0)!.EmitSignal(BaseButton.SignalName.Pressed);
-        await PressKey(Key.D, shift: true);
-        Log($"hotkeys: draw→Shift+D: status='{SettingsMenu.HotkeyStatus}' active draw={Hotkeys.Active[0, 0]}");
-        SettingsMenu.Close();
-        await PressKey(Key.D, shift: true);
-        Log($"hotkeys: Shift+D → {PileViewer.DescribeOpenView()}");
-        await PressKey(Key.D, shift: true);
-        foreach (StringName action in movedOffD) mkb[action] = Key.D;
-        Log($"hotkeys: restored game D binding; native(D)={Hotkeys.NativeAction(Key.D) ?? "none"}");
-
-        // (c) Duplicate with a teammate slot that doesn't exist this game → saved with a warning; lowest teammate wins.
-        SettingsMenu.Open();
-        SettingsMenu.GetHotkeyButton(0)!.EmitSignal(BaseButton.SignalName.Pressed);
-        await PressKey(Key.Z, ctrl: true); // teammate 2's default draw binding
-        Log($"hotkeys: draw→Ctrl+Z ({teammates.Count} teammate(s)): status='{SettingsMenu.HotkeyStatus}' active draw={Hotkeys.Active[0, 0]}");
-        SettingsMenu.Close();
-        await PressKey(Key.Z, ctrl: true);
-        Log($"hotkeys: Ctrl+Z → {PileViewer.DescribeOpenView()}");
-        await PressKey(Key.Z, ctrl: true);
-
-        SettingsMenu.Open(); // leave open for the screenshot
-    }
-
-    private static async Task PressKey(Key key, bool shift = false, bool ctrl = false)
-    {
-        // Inject through Godot's input pipeline (same route as a physical key press), so this also checks
-        // that the NGame._Input patch sees the key and nothing upstream swallows it.
-        var down = new InputEventKey { Keycode = key, PhysicalKeycode = key, ShiftPressed = shift, CtrlPressed = ctrl, Pressed = true };
-        var up = new InputEventKey { Keycode = key, PhysicalKeycode = key, ShiftPressed = shift, CtrlPressed = ctrl, Pressed = false };
-        Input.ParseInputEvent(down);
-        await Wait(0.1);
-        Input.ParseInputEvent(up);
-        await Wait(0.9);
-    }
-
-    /// <summary>
-    /// Hand Viewer suite. Milestone 1: probe — log the native hand's node structure (layout, holders, the
-    /// Hand Card Count index labels, the peek "eye" button) and every teammate's hand, as groundwork for the UI.
-    /// </summary>
-    private static async Task ExerciseHands(bool mutator, bool observer)
-    {
-        Settings.ResetForAutoTest();
-        for (int i = 0; i < 120 && !CombatManager.Instance.IsInProgress; i++) await Wait(0.25);
-        Log($"hands: combat in progress: {CombatManager.Instance.IsInProgress} (mutator={mutator}, observer={observer})");
-        await Wait(3.0);
-        Log($"polish: default view at combat start = {HandViewer.ViewedNetId?.ToString() ?? "nobody"} (lowest teammate = {PileViewer.Teammates().FirstOrDefault().player?.NetId})");
-        HandViewer.View(null); // the older phases start from "nobody shown"
-
-        NPlayerHand? hand = NPlayerHand.Instance;
-        if (hand == null)
-        {
-            Log("hands: no NPlayerHand");
-        }
-        else
-        {
-            Log($"hands: NPlayerHand pos={hand.Position} global={hand.GlobalPosition} size={hand.Size} holders={hand.ActiveHolders.Count} " +
-                $"showCardIndices={SaveManager.Instance.PrefsSave.ShowCardIndices}");
-            if (hand.ActiveHolders.FirstOrDefault() is NHandCardHolder holder)
-            {
-                Log("hands: first holder tree:\n" + PileViewer.DescribeTree(holder, 0));
-            }
-            Log("hands: peek button tree:\n" + PileViewer.DescribeTree(hand.PeekButton, 0));
-            Log("hands: holder transforms: " + string.Join("; ", hand.ActiveHolders.Select((h, i) =>
-                $"#{i} pos={h.Position} rot={h.RotationDegrees:0.#} scale={h.Scale.X:0.##} card={h.CardNode?.Model?.Id.Entry}")));
-        }
-
-        foreach (var (number, player) in PileViewer.Teammates())
-        {
-            var cards = PileType.Hand.GetPile(player).Cards;
-            Log($"hands: P{number} {player.Character.Id.Entry} hand ({cards.Count}): " +
-                string.Join(", ", cards.Select(c => $"{c.Title}[{c.EnergyCost.GetWithModifiers(CostModifiers.All)}]")));
-        }
-
-        await ExerciseHandViewerUi();
-        SettingsMenu.Close();
-        await ExerciseLiveHand(mutator, observer);
-        Log("done");
-    }
-
-    /// <summary>
-    /// hv3: the observer (host) views the mutator's (client 1000's) hand; the mutator draws, adds and removes hand
-    /// cards through networked console actions; the observer logs its hand readout every second.
-    /// </summary>
-    private static async Task ExerciseLiveHand(bool mutator, bool observer)
-    {
-        const ulong mutatorId = 1000;
-        if (observer) HandViewer.View(mutatorId);
-        Task watch = observer ? WatchHand(9) : Task.CompletedTask;
-        if (mutator)
-        {
-            await Wait(1.0);
-            RunState runState = RunManager.Instance.DebugOnlyGetState()!;
-            Player me = LocalContext.GetMe(runState)!;
-            string cardId = PileType.Hand.GetPile(me).Cards.First().Id.Entry;
-            foreach (string cmd in new[] { "draw 2", $"card {cardId}", $"remove_card {cardId}" })
-            {
-                RunManager.Instance.ActionQueueSynchronizer.RequestEnqueue(new ConsoleCmdGameAction(me, cmd, inCombat: true));
-                Log($"hv3: mutator enqueued '{cmd}'");
-                await Wait(2.0);
-            }
-            Log("hv3: mutator's own hand: " + HandViewer.DescribeHand(me));
-        }
-        await watch;
-        if (observer) await ExerciseCloseups();
-        await ExerciseAccuracy(mutator, observer);
-        if (observer) await ExerciseHideHand();
-        await ExerciseThirdPlayer(observer);
-        if (observer) await ExerciseHandHotkeys();
-        await ExerciseGlow(mutator, observer);
-        await ExerciseFeedback(mutator, observer);
-        if (observer) await ExercisePolish();
-    }
-
-    /// <summary>
-    /// Feedback PR: hover delay (+ click and sideways shortcuts, instant/disabled ends), closeup shade, teammate
-    /// cards ignoring the mouse while you play a card, preview-only targeting of a teammate's card (single target
-    /// with their Strength/Vulnerable/hits, all-enemies), mouse-button hotkeys, version text.
-    /// </summary>
-    private static async Task ExerciseFeedback(bool mutator, bool observer)
-    {
-        await Wait(1.0);
-        string Card<T>() => ModelDb.AllCards.First(c => c is T).Id.Entry;
-        if (mutator)
-        {
-            CombatState combat = CombatManager.Instance.DebugOnlyGetState()!;
-            Player me = LocalContext.GetMe(RunManager.Instance.DebugOnlyGetState()!)!;
-            int enemy = combat.Creatures.ToList().IndexOf(combat.HittableEnemies.First());
-            string vulnerable = ModelDb.AllPowers.First(p => p is VulnerablePower).Id.Entry;
-            await Enqueue(me, $"card {Card<BeatIntoShape>()}", $"card {Card<EchoingSlash>()}", $"power {vulnerable} 2 {enemy}");
-            await Wait(2.0);
-            int hits = CombatManager.Instance.History.Entries.OfType<DamageReceivedEntry>()
-                .Count(e => e.Dealer == me.Creature && e.Receiver == combat.HittableEnemies.First() && e.HappenedThisTurn(combat));
-            Log($"feedback: mutator hits on the enemy this turn = {hits}; own hand: {string.Join(" / ", HandViewer.DumpOwnHand())}");
-            return;
-        }
-        if (!observer) return;
-
-        Player? teammate = PileViewer.Teammates().Select(t => t.player).FirstOrDefault(p => p.NetId == 1000);
-        if (teammate == null) return;
-        await WaitUntil(() => PileType.Hand.GetPile(teammate).Cards.Any(c => c is EchoingSlash)
-            && CombatManager.Instance.DebugOnlyGetState()!.HittableEnemies.First().Powers.Any(p => p is VulnerablePower), 30);
-        HandViewer.View(1000);
-        if (HandViewer.HideOwnHand) HandViewer.ToggleHideOwnHand();
-        await Wait(2.0);
-        Vector2 away = new(960f, 300f);
-        Vector2 Peek(int i) => HandViewer.CardCenter(i)!.Value - new Vector2(0f, 140f);
-
-        // Hover delay 0.5 s: nothing at 0.2 s, closeup by 0.8 s; then sideways is immediate.
-        Settings.HoverDelay = 0.5f;
-        await Mouse(away, null);
-        await Wait(0.6);
-        await Mouse(Peek(0), null);
-        await Wait(0.2);
-        Log("feedback: delay 0.2s → " + HandViewer.DescribeHover());
-        await Wait(0.6);
-        Log("feedback: delay 0.8s → " + HandViewer.DescribeHover() + " | " + HandViewer.DescribeCloseup());
-        await Mouse(Peek(1), null);
-        await Wait(0.1);
-        Log("feedback: sideways 0.1s → " + HandViewer.DescribeHover());
-        await Mouse(away, null);
-        await Wait(0.6);
-        await Mouse(Peek(2), null);
-        await Wait(0.2);
-        Log("feedback: new hover after leaving, 0.2s → " + HandViewer.DescribeHover());
-        await Mouse(away, null);
-        await Wait(0.6);
-        await Mouse(Peek(3), null);
-        await Mouse(Peek(3), true);
-        await Mouse(Peek(3), false);
-        await Wait(0.1);
-        Log("feedback: click short-circuit 0.1s → " + HandViewer.DescribeHover());
-        await Mouse(away, null);
-        await Wait(0.6);
-        Settings.HoverDelay = Settings.MaxHoverDelay;
-        await Mouse(Peek(0), null);
-        await Wait(1.0);
-        Log("feedback: disabled, 1s → " + HandViewer.DescribeHover());
-        await Mouse(away, null);
-        await Wait(0.6);
-        Settings.HoverDelay = 0f;
-        await Mouse(Peek(0), null);
-        await Wait(0.1);
-        Log("feedback: instant, 0.1s → " + HandViewer.DescribeHover());
-        await Mouse(away, null);
-        Settings.HoverDelay = 0.5f;
-        await Wait(0.6);
-
-        // Your own card play: teammate cards ignore the mouse while it lasts.
-        if (NPlayerHand.Instance?.ActiveHolders.FirstOrDefault() is NHandCardHolder own)
-        {
-            Vector2 start = own.Hitbox.GetGlobalRect().GetCenter();
-            await Mouse(start, null);
-            await Mouse(start, true);
-            for (int i = 1; i <= 6; i++) await Mouse(start + new Vector2(0f, -30f * i), null);
-            await Wait(0.3);
-            await Mouse(Peek(1), null);
-            await Wait(0.8);
-            Log($"feedback: during my card play (inCardPlay={NPlayerHand.Instance.InCardPlay}) → " + HandViewer.DescribeHover());
-            await RightClick(Peek(1));
-            await Mouse(Peek(1), false);
-            await Mouse(away, null);
-            await Wait(1.0);
-            Log("feedback: after cancelling my play → " + HandViewer.DescribeHover());
-        }
-
-        // Preview-only targeting with a teammate card: Beat Into Shape (their hits this turn) and Echoing Slash (all enemies).
-        Creature target = CombatManager.Instance.DebugOnlyGetState()!.HittableEnemies.First();
-        Vector2 enemyAt = NCombatRoom.Instance!.GetCreatureNode(target)!.Hitbox.GetGlobalRect().GetCenter();
-        foreach (var (label, match) in new (string, Func<CardModel, bool>)[] { ("BeatIntoShape", c => c is BeatIntoShape), ("EchoingSlash", c => c is EchoingSlash) })
-        {
-            int index = HandViewer.IndexOf(match);
-            if (index < 0) { Log($"feedback: {label} not in the teammate hand"); continue; }
-            Vector2 p = Peek(index);
-            await Mouse(p, null);
-            await Wait(0.8);
-            Log($"feedback: {label} before drag: {HandViewer.DescribeHover()}");
-            await Mouse(p, true);
-            for (int i = 1; i <= 8; i++) await Mouse(p.Lerp(enemyAt, i / 8f), null);
-            await Wait(0.6);
-            Log($"feedback: {label} over the enemy (dragging={HandViewer.IsDragging} aiming={HandViewer.IsAiming}): {HandViewer.DescribeDragCard()}");
-            await Mouse(enemyAt, false);
-            await Wait(0.8);
-            Log($"feedback: {label} released (dragging={HandViewer.IsDragging} aiming={HandViewer.IsAiming})");
-            await Mouse(away, null);
-            await Wait(2.2); // bubble cooldown
-        }
-
-        // Mouse-button hotkey: bind teammate 1 Draw to Mouse 4 by pressing it, then use it.
-        SettingsMenu.Open();
-        SettingsMenu.GetHotkeyButton(PileType.Discard)!.EmitSignal(BaseButton.SignalName.Pressed);
-        await MouseButtonPress(MouseButton.Xbutton1);
-        Log($"feedback: bound with Mouse 4 → teammate1 Discard={Hotkeys.Active[0, Array.IndexOf(Hotkeys.Slots, PileType.Discard)]} button='{SettingsMenu.GetHotkeyButton(PileType.Discard)!.Text}' version='{SettingsMenu.VersionText}'");
-        SettingsMenu.Close();
-        await Wait(0.5);
-        await MouseButtonPress(MouseButton.Xbutton1);
-        await Wait(1.0);
-        Log($"feedback: Mouse 4 pressed → pileScreenOpen={NCapstoneContainer.Instance?.InUse} {PileViewer.DescribeOpenView()}");
-        PileViewer.OpenTeammatePile(0, PileType.Discard); // close
-        Hotkeys.ResetDefaults(hand: false);
-        await Wait(1.0);
-
-        // Hide/show hand hotkey (H) still works with the button hidden.
-        Hotkeys.ResetDefaults(hand: true); // hv9 rebinds it to Shift+J
-        Settings.HideHandButtonEnabled = false;
-        await Wait(0.5);
-        await PressKey(Key.H);
-        await Wait(0.5);
-        Log($"feedback: button hidden, H → hideOwnHand={HandViewer.HideOwnHand} button visible={HandViewer.HideButton?.Visible}");
-        await PressKey(Key.H);
-        await Wait(0.5);
-        Log($"feedback: button hidden, H again → hideOwnHand={HandViewer.HideOwnHand}");
-        Settings.HideHandButtonEnabled = true;
-        await Wait(0.5);
     }
 
     /// <summary>
@@ -732,235 +300,554 @@ public static class AutoTest
         await Wait(0.2);
     }
 
-    /// <summary>
-    /// Polish PR: hand without strips, own strip eye = Hide hand, plain strip drag, lifted closeup, the "own hand"
-    /// bubble, and whose hand is shown carrying over to the next fight (with Hide hand reset).
-    /// </summary>
-    private static async Task ExercisePolish()
+    // =====================================================================================================
+    // Test suites. "fast" (default, ~30 s with launch): every feature once, in-process checks on the host.
+    // "full" (≤ 3 min, before pushes): fast + cross-instance accuracy/glow (lock-step with the first client),
+    // hotkey regressions, hover delay ends, 3rd player, whose hand carries over to the next fight.
+    // Each check logs "CHECK PASS|FAIL name — detail"; the runner (dev-autotest-mp.ps1) prints them, compares
+    // the REFn (client) / VIEWn (host) dumps, and ends with a summary. Roles: host = observer, first client
+    // (1000) = mutator, second client (1001, full with 3 players) = a static reference hand.
+    // =====================================================================================================
+
+    private static bool Full => Suite == "full";
+
+    private const ulong MutatorId = 1000;
+
+    private static int _pass;
+
+    private static int _fail;
+
+    private static bool Check(string name, bool ok, string detail = "")
     {
-        await Wait(2.0);
-        ulong me = RunManager.Instance.NetService.NetId;
-        HandViewer.View(1000);
-        if (HandViewer.HideOwnHand) HandViewer.ToggleHideOwnHand();
-
-        Settings.Enabled = false;
-        await Wait(1.0);
-        Log($"polish: strips off → strips: {PileViewer.DescribeState()} | hand: {HandViewer.DescribeCards()}");
-        Settings.Enabled = true;
-        Settings.ShowSelf = true;
-        await Wait(1.0);
-        PileViewer.SimulatePress(PileViewer.StripIndexOf(me), PileType.Hand);
-        await Wait(0.5);
-        Log($"polish: own eye → hideOwnHand={HandViewer.HideOwnHand} viewing={HandViewer.ViewedNetId}");
-        PileViewer.SimulatePress(PileViewer.StripIndexOf(me), PileType.Hand);
-        await Wait(0.5);
-        Log($"polish: own eye again → hideOwnHand={HandViewer.HideOwnHand} viewing={HandViewer.ViewedNetId}");
-        Settings.ShowSelf = false;
-        await Wait(1.0);
-
-        // Plain drag on a slot moves the strip and doesn't open the pile; a click still opens it.
-        if (PileViewer.SlotRect(1000, PileType.Discard) is Rect2 slot)
-        {
-            Vector2 start = slot.GetCenter();
-            await Mouse(start, pressed: true);
-            await Mouse(start + new Vector2(30f, -20f), pressed: null);
-            await Mouse(start + new Vector2(60f, -40f), pressed: null);
-            await Mouse(start + new Vector2(60f, -40f), pressed: false);
-            await Wait(0.8);
-            Log($"polish: after plain drag: offset={Settings.GetOffset(1000)} pileScreenOpen={NCapstoneContainer.Instance?.InUse}");
-            Vector2 now = PileViewer.SlotRect(1000, PileType.Discard)!.Value.GetCenter();
-            await Mouse(now, pressed: true);
-            await Mouse(now, pressed: false);
-            await Wait(1.0);
-            Log($"polish: after click: pileScreenOpen={NCapstoneContainer.Instance?.InUse} {PileViewer.DescribeOpenView()}");
-            PileViewer.OpenTeammatePile(0, PileType.Discard); // close
-            await Wait(1.0);
-            Settings.ResetStripPositions();
-        }
-
-        // Closeup: hover the visible top of a teammate card; it should rise fully above your hand.
-        await Wait(1.0);
-        if (HandViewer.CardCenter(0) is Vector2 card)
-        {
-            Vector2 point = card - new Vector2(0f, 120f);
-            await Mouse(point, pressed: null);
-            await Wait(1.2);
-            Log($"polish: closeup {HandViewer.DescribeFocus()} | {HandViewer.DescribeCloseup()}");
-            await Mouse(point, pressed: true);
-            await Mouse(point, pressed: false);
-            await Wait(0.5);
-            Log("polish: pressed a teammate card");
-            await Mouse(new Vector2(960f, 300f), pressed: null);
-            await Wait(0.8);
-        }
-
-        // Next fight: the shown hand carries over (here: nobody, chosen), Hide hand resets.
-        HandViewer.View(null);
-        if (!HandViewer.HideOwnHand) HandViewer.ToggleHideOwnHand();
-        Log($"polish: before win: viewing={HandViewer.ViewedNetId?.ToString() ?? "nobody"} hideOwnHand={HandViewer.HideOwnHand}");
-        Player player = LocalContext.GetMe(RunManager.Instance.DebugOnlyGetState()!)!;
-        RunManager.Instance.ActionQueueSynchronizer.RequestEnqueue(new ConsoleCmdGameAction(player, "win", inCombat: true));
-        await WaitUntil(() => !CombatManager.Instance.IsInProgress, 20);
-        await Wait(3.0);
-        Log($"polish: combat over: viewing={HandViewer.ViewedNetId?.ToString() ?? "nobody"} hideOwnHand={HandViewer.HideOwnHand}");
-        string fight = "fight " + PickEncounter().Id.Entry;
-        RunManager.Instance.ActionQueueSynchronizer.RequestEnqueue(new ConsoleCmdGameAction(player, fight, inCombat: false));
-        await WaitUntil(() => CombatManager.Instance.IsInProgress, 30);
-        await Wait(3.0);
-        Log($"polish: next fight ({CombatManager.Instance.IsInProgress}): viewing={HandViewer.ViewedNetId?.ToString() ?? "nobody"} hideOwnHand={HandViewer.HideOwnHand} cards={HandViewer.DescribeCards()}");
-        HandViewer.View(1000);
-        await Wait(3.0);
-        Log($"polish: next fight, view 1000: {HandViewer.DescribeCards()}");
+        if (ok) _pass++;
+        else _fail++;
+        Log($"CHECK {(ok ? "PASS" : "FAIL")} {name}{(detail == "" ? "" : " — " + detail)}");
+        return ok;
     }
 
-    /// <summary>
-    /// hv10: the playable glow on the observer's view of the mutator's hand follows the mutator's state — compared
-    /// with the mutator's own native hand while their turn is open, then all off after they press End Turn, then
-    /// back after they undo it. Energy is spent first so some cards become unplayable.
-    /// </summary>
-    private static async Task ExerciseGlow(bool mutator, bool observer)
+    private static Player Me => LocalContext.GetMe(RunManager.Instance.DebugOnlyGetState()!)!;
+
+    private static CombatState Combat => CombatManager.Instance.DebugOnlyGetState()!;
+
+    private static void Send(Player me, string cmd, bool inCombat = true)
     {
-        await Wait(2.0);
-        Player? me = mutator ? LocalContext.GetMe(RunManager.Instance.DebugOnlyGetState()!) : null;
-        Player? teammate = observer ? PileViewer.Teammates().Select(t => t.player).FirstOrDefault(p => p.NetId == 1000) : null;
-        if (observer)
-        {
-            HandViewer.View(1000);
-            if (HandViewer.HideOwnHand) HandViewer.ToggleHideOwnHand();
-        }
-
-        async Task Phase(string name, Func<Task>? mutate, Func<Player, bool>? ready)
-        {
-            if (mutator && mutate != null) await mutate();
-            if (observer && teammate != null && ready != null) await WaitUntil(() => ready(teammate), 40);
-            await Wait(1.5); // let the glow tweens and our 0.25 s refresh settle
-            if (mutator) Log($"hv10: REFERENCE {name} energy={me!.PlayerCombatState?.Energy} glow: {HandViewer.DescribeOwnGlow()}");
-            if (observer && teammate != null)
-            {
-                Log($"hv10: VIEWER {name} energy={teammate.PlayerCombatState?.Energy} ended={CombatManager.Instance.IsPlayerReadyToEndTurn(teammate)} " +
-                    $"glow: {HandViewer.DescribeTeammateGlow()}");
-            }
-            if (mutator) await Wait(8.0); // hold each state so the observer (which may lag) sees it
-        }
-
-        if (mutator) await Wait(20.0); // the observer runs extra hv7-hv9 steps first
-        await Phase("1 (start)", null, null);
-        await Phase("2 (ended turn, full energy)", async () =>
-        {
-            NCombatRoom.Instance!.Ui.EndTurnButton.CallReleaseLogic();
-            Log("hv10: mutator pressed End Turn");
-            await Wait(0.5);
-        }, t => CombatManager.Instance.IsPlayerReadyToEndTurn(t));
-        await Phase("3 (undid end turn)", async () =>
-        {
-            for (int i = 0; i < 20 && !Traverse.Create(NCombatRoom.Instance!.Ui.EndTurnButton).Property<bool>("CanTurnBeEnded").Value; i++) await Wait(0.25);
-            NCombatRoom.Instance!.Ui.EndTurnButton.CallReleaseLogic();
-            Log("hv10: mutator pressed End Turn again (undo)");
-            await Wait(0.5);
-        }, t => !CombatManager.Instance.IsPlayerReadyToEndTurn(t));
-        // Spend energy: play the most expensive playable cards (targeting the first enemy) until none is left.
-        await Phase("4 (energy spent)", async () =>
-        {
-            for (int i = 0; i < 6 && me!.PlayerCombatState!.Energy > 0; i++)
-            {
-                var card = PileType.Hand.GetPile(me).Cards.Where(c => c.CanPlay() && c.EnergyCost.GetWithModifiers(CostModifiers.All) > 0
-                        && (c.Id.Entry.StartsWith("STRIKE") || c.Id.Entry.StartsWith("DEFEND"))) // no choice prompts
-                    .OrderByDescending(c => c.EnergyCost.GetWithModifiers(CostModifiers.All)).FirstOrDefault();
-                if (card == null) break;
-                Creature? target = card.TargetType == TargetType.AnyEnemy
-                    ? CombatManager.Instance.DebugOnlyGetState()!.HittableEnemies.FirstOrDefault() : null;
-                RunManager.Instance.ActionQueueSynchronizer.RequestEnqueue(new PlayCardAction(card, target));
-                Log($"hv10: mutator played {card.Title} (energy before {me.PlayerCombatState.Energy})");
-                await Wait(2.0);
-            }
-        }, t => t.PlayerCombatState?.Energy == 0);
+        RunManager.Instance.ActionQueueSynchronizer.RequestEnqueue(new ConsoleCmdGameAction(me, cmd, inCombat));
+        Log($"sent '{cmd}'");
     }
 
-    /// <summary>hv9: optional hotkeys — per-teammate Hand toggle and Hide/show my hand; unbound by default.</summary>
-    private static async Task ExerciseHandHotkeys()
+    private static Creature FirstEnemy => Combat.HittableEnemies.First();
+
+    /// <summary>Hotkey row of the mutator (teammate number - 1; party order follows join order, not launch order).</summary>
+    private static int MutatorRow => PileViewer.Teammates().FindIndex(t => t.player.NetId == MutatorId);
+
+    /// <summary>Default modifiers of a hotkey row: Shift, Ctrl, Ctrl+Shift.</summary>
+    private static (bool Shift, bool Ctrl) RowMods(int row) => row switch { 0 => (true, false), 1 => (false, true), _ => (true, true) };
+
+    private static string RowKey(int row, string key) => (RowMods(row).Ctrl ? "Ctrl+" : "") + (RowMods(row).Shift ? "Shift+" : "") + key;
+
+    private static Task PressRowKey(int row, Key key) => PressKey(key, RowMods(row).Shift, RowMods(row).Ctrl);
+
+    private static void SelectHotkeyRow(int row)
     {
-        int handSlot = Array.IndexOf(Hotkeys.Slots, PileType.Hand);
-        Log($"hv9: defaults: teammate1 Hand={Hotkeys.Active[0, handSlot]?.ToString() ?? "unbound"} hideHand={Hotkeys.Active[Hotkeys.GlobalRow, 0]?.ToString() ?? "unbound"}");
-        if (HandViewer.HideOwnHand) HandViewer.ToggleHideOwnHand();
-        HandViewer.View(null);
-        await Wait(0.5);
-
-        SettingsMenu.Open();
-        SettingsMenu.TeammatePicker!.Select(0);
-        SettingsMenu.GetHotkeyButton(PileType.Hand)!.EmitSignal(BaseButton.SignalName.Pressed);
-        await PressKey(Key.H, shift: true);
-        SettingsMenu.HideHandHotkeyButton!.EmitSignal(BaseButton.SignalName.Pressed);
-        await PressKey(Key.J, shift: true);
-        Log($"hv9: bound: teammate1 Hand={Hotkeys.Active[0, handSlot]} hideHand={Hotkeys.Active[Hotkeys.GlobalRow, 0]} status='{SettingsMenu.HotkeyStatus}'");
-        SettingsMenu.Close();
-
-        await PressKey(Key.H, shift: true);
-        Log("hv9: Shift+H → " + HandViewer.DescribeState());
-        await PressKey(Key.J, shift: true);
-        Log("hv9: Shift+J → " + HandViewer.DescribeState());
-        await PressKey(Key.J, shift: true);
-        Log("hv9: Shift+J again → " + HandViewer.DescribeState());
-        await PressKey(Key.H, shift: true);
-        Log("hv9: Shift+H again → " + HandViewer.DescribeState());
+        SettingsMenu.TeammatePicker!.Select(row);
+        SettingsMenu.TeammatePicker.EmitSignal(OptionButton.SignalName.ItemSelected, (long)row);
     }
 
-    /// <summary>
-    /// hv8 (3+ players): the host switches its view from client 1000 to client 1001 with 1001's eye and back; each
-    /// time the rendered hand must equal that client's own hand. Client 1001 logs its own hand as the reference.
-    /// </summary>
-    private static async Task ExerciseThirdPlayer(bool observer)
+    private static int CreatureIndex(Creature c) => Combat.Creatures.ToList().IndexOf(c);
+
+    private static string Id<T>(IEnumerable<AbstractModel> models) => models.First(m => m is T).Id.Entry;
+
+    private static async Task RunSuite(bool isHost)
     {
-        if (ExpectedPlayers < 3) return;
-        if (ClientIndex == 1)
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        Settings.ResetForAutoTest();
+        await WaitUntil(() => CombatManager.Instance.IsInProgress && NPlayerHand.Instance != null, 60);
+        if (!Check("combat started", CombatManager.Instance.IsInProgress && NPlayerHand.Instance != null))
         {
-            await Wait(4.0);
-            foreach (string line in HandViewer.DumpOwnHand()) Log("hv8: ref1001 " + line);
-            Log("hv8: ref1001 done");
+            Log($"RESULT suite={Suite} pass={_pass} fail={_fail} time={clock.Elapsed.TotalSeconds:0.0}s");
+            Log("done");
             return;
         }
-        if (!observer) return;
-        foreach (ulong id in new ulong[] { 1001, 1000 })
+        // Wait for the opening hand to be dealt and settle.
+        await WaitUntil(() => NPlayerHand.Instance!.ActiveHolders.Count > 0 && NPlayerHand.Instance.ActiveHolders.Count == PileType.Hand.GetPile(Me).Cards.Count, 15);
+        await Wait(0.8);
+        Log($"suite {Suite}: combat ready after {clock.Elapsed.TotalSeconds:0.0}s in this phase");
+        try
         {
-            PileViewer.SimulatePress(PileViewer.StripIndexOf(id), PileType.Hand);
-            await Wait(2.0);
-            Log($"hv8: switched → {HandViewer.DescribeState()}");
-            foreach (string line in HandViewer.DumpTeammateCards()) Log($"hv8: view{id} " + line);
+            if (isHost) await Observer();
+            else if (Me.NetId == MutatorId) await Mutator();
+            else if (Full) await StaticReference();
+        }
+        catch (Exception ex)
+        {
+            Check("no exception", false, ex.ToString().Replace('\n', ' '));
+        }
+        Log($"RESULT suite={Suite} pass={_pass} fail={_fail} time={clock.Elapsed.TotalSeconds:0.0}s");
+        Log("done");
+    }
+
+    // ---------------- Lock-step (full) ----------------
+
+    private static Player Host => Combat.Players.First(p => p.NetId == 1);
+
+    private static Player MutatorPlayer => Combat.Players.First(p => p.NetId == MutatorId);
+
+    private static int _hostGold0;
+
+    private static int _mutatorGold0;
+
+    /// <summary>Observer: ask the mutator for step k (host gold +1) and wait until it's done (mutator gold +1).</summary>
+    private static async Task<bool> Ask(int k)
+    {
+        Send(Me, "gold 1");
+        await WaitUntil(() => MutatorPlayer.Gold >= _mutatorGold0 + k, 30);
+        return Check($"mutator finished step {k}", MutatorPlayer.Gold >= _mutatorGold0 + k);
+    }
+
+    private const int MutatorSteps = 4;
+
+    private static async Task Mutator()
+    {
+        Player me = Me;
+        _hostGold0 = Host.Gold;
+        _mutatorGold0 = me.Gold;
+        // Pile changes for the host's live-update check.
+        var opening = PileType.Hand.GetPile(me).Cards;
+        string first = (opening.FirstOrDefault(c => !c.Id.Entry.StartsWith("STRIKE")) ?? opening.First()).Id.Entry;
+        Send(me, "draw 1");
+        Send(me, $"card {first} Discard");
+        Send(me, $"card {first} Exhaust");
+        if (!Full) return;
+
+        for (int k = 1; k <= MutatorSteps; k++)
+        {
+            await WaitUntil(() => Host.Gold >= _hostGold0 + k, 120);
+            if (Host.Gold < _hostGold0 + k)
+            {
+                Check($"host asked for step {k}", false);
+                return;
+            }
+            await MutatorStep(k, me);
+            int gold = me.Gold;
+            Send(me, "gold 1");
+            await WaitUntil(() => me.Gold > gold, 10);
         }
     }
 
-    /// <summary>hv7: Hide hand turns your own cards into dark silhouettes with a white outline; Show hand restores them.</summary>
-    private static async Task ExerciseHideHand()
+    private static async Task MutatorStep(int k, Player me)
     {
-        Log("hv7: before: " + HandViewer.DescribeOwnHandLook());
-        HandViewer.HideButton?.EmitSignal(BaseButton.SignalName.Pressed);
-        await Wait(1.0);
-        Log("hv7: hidden: " + HandViewer.DescribeOwnHandLook() + " | " + HandViewer.DescribeState());
-        HandViewer.HideButton?.EmitSignal(BaseButton.SignalName.Pressed);
-        await Wait(1.0);
-        Log("hv7: shown again: " + HandViewer.DescribeOwnHandLook());
-
-        // Draggable button (real mouse events): a drag moves it without toggling; a click toggles; F1 reset restores.
-        if (HandViewer.HideButton is Button button)
+        var hand = PileType.Hand.GetPile(me);
+        switch (k)
         {
-            Log("hv7: button default (above energy): " + HandViewer.DescribeState());
-            Vector2 start = button.GetGlobalRect().GetCenter();
-            await Mouse(start, pressed: true);
-            await Mouse(start + new Vector2(30f, -20f), pressed: null);
-            await Mouse(start + new Vector2(80f, -50f), pressed: null);
-            await Mouse(start + new Vector2(80f, -50f), pressed: false);
-            Log($"hv7: after drag: offset={Settings.HideButtonOffset} {HandViewer.DescribeState()}");
-            Vector2 now = button.GetGlobalRect().GetCenter();
-            await Mouse(now, pressed: true);
-            await Mouse(now, pressed: false);
-            Log("hv7: after click: " + HandViewer.DescribeState());
-            SettingsMenu.Open();
-            SettingsMenu.ResetHideButtonPositionButton!.EmitSignal(BaseButton.SignalName.Pressed);
-            SettingsMenu.Close();
-            await Wait(0.5);
-            Log($"hv7: after F1 reset: offset={Settings.HideButtonOffset} {HandViewer.DescribeState()}");
+            case 1:
+                // Cost/number changers (the host already put Strength + Weak on us and Vulnerable on the enemy),
+                // then one hit on the enemy so Beat Into Shape has hits to count.
+                int attack = hand.Cards.ToList().FindIndex(c => c.Type == CardType.Attack);
+                Send(me, $"relic {Id<SpikedGauntlets>(ModelDb.AllRelics)}");
+                Send(me, $"enchant {ModelDb.Enchantment<Sharp>().Id.Entry} 2 {Math.Max(attack, 0)}");
+                Send(me, $"card {Id<BeatIntoShape>(ModelDb.AllCards)}");
+                Send(me, $"card {Id<EchoingSlash>(ModelDb.AllCards)}");
+                Send(me, "energy 6");
+                await WaitUntil(() => hand.Cards.Any(c => c is EchoingSlash) && me.Relics.Any(r => r is SpikedGauntlets), 10);
+                if (hand.Cards.FirstOrDefault(c => c.Id.Entry.StartsWith("STRIKE") && c.CanPlay()) is CardModel strike)
+                {
+                    RunManager.Instance.ActionQueueSynchronizer.RequestEnqueue(new PlayCardAction(strike, FirstEnemy));
+                    await WaitUntil(() => !hand.Cards.Contains(strike), 10);
+                }
+                await WaitUntil(() => NPlayerHand.Instance!.ActiveHolders.Count == hand.Cards.Count, 10);
+                await Wait(0.8);
+                foreach (string line in HandViewer.DumpOwnHand()) Log("REF1 " + line);
+                break;
+            case 2:
+                NCombatRoom.Instance!.Ui.EndTurnButton.CallReleaseLogic();
+                await WaitUntil(() => CombatManager.Instance.IsPlayerReadyToEndTurn(me), 10);
+                break;
+            case 3:
+                await WaitUntil(() => Traverse.Create(NCombatRoom.Instance!.Ui.EndTurnButton).Property<bool>("CanTurnBeEnded").Value, 5);
+                NCombatRoom.Instance!.Ui.EndTurnButton.CallReleaseLogic();
+                await WaitUntil(() => !CombatManager.Instance.IsPlayerReadyToEndTurn(me), 10);
+                break;
+            case 4:
+                // Spend all energy on Strikes/Defends (no choice prompts).
+                for (int i = 0; i < 10 && me.PlayerCombatState!.Energy > 0; i++)
+                {
+                    var card = hand.Cards.Where(c => c.CanPlay() && c.EnergyCost.GetWithModifiers(CostModifiers.All) > 0
+                            && (c.Id.Entry.StartsWith("STRIKE") || c.Id.Entry.StartsWith("DEFEND")))
+                        .OrderByDescending(c => c.EnergyCost.GetWithModifiers(CostModifiers.All)).FirstOrDefault();
+                    if (card == null) break;
+                    RunManager.Instance.ActionQueueSynchronizer.RequestEnqueue(new PlayCardAction(card,
+                        card.TargetType == TargetType.AnyEnemy ? FirstEnemy : null));
+                    await WaitUntil(() => !hand.Cards.Contains(card), 10);
+                }
+                await WaitUntil(() => NPlayerHand.Instance!.ActiveHolders.Count == hand.Cards.Count, 10);
+                await Wait(1.0); // glow tweens
+                Log($"REF2 energy={me.PlayerCombatState!.Energy} {HandViewer.DescribeOwnGlow()}");
+                break;
         }
-        if (!HandViewer.HideOwnHand) HandViewer.HideButton?.EmitSignal(BaseButton.SignalName.Pressed); // leave hidden for the screenshot
+    }
+
+    /// <summary>Second client (full, 3 players): its own hand as the reference for the host's 3rd-player view.</summary>
+    private static async Task StaticReference()
+    {
         await Wait(1.0);
+        foreach (string line in HandViewer.DumpOwnHand()) Log("REF3 " + line);
+    }
+
+    // ---------------- Observer (host) ----------------
+
+    private static async Task Observer()
+    {
+        Player me = Me;
+        var teammates = PileViewer.Teammates();
+        Player mutator = teammates.First(t => t.player.NetId == MutatorId).player;
+        _hostGold0 = me.Gold;
+        _mutatorGold0 = mutator.Gold;
+        Vector2 away = new(960f, 300f);
+
+        // ---- Strips ----
+        Check("a strip over every teammate", teammates.All(t => PileViewer.StripCounts(t.player.NetId) != null), PileViewer.DescribeState());
+        await WaitUntil(() => PileType.Exhaust.GetPile(mutator).Cards.Count > 0, 15);
+        await Wait(0.2);
+        string expected = string.Join("/", PileViewer.StripSlots.Select(p => p.GetPile(mutator).Cards.Count));
+        string shown = string.Join("/", PileViewer.StripCounts(mutator.NetId) ?? Array.Empty<string>());
+        Check("strip counts follow the teammate's piles live", shown == expected, $"strip {shown}, piles {expected}");
+
+        PileViewer.SimulatePress(PileViewer.StripIndexOf(mutator.NetId), PileType.Draw);
+        await WaitUntil(() => NCapstoneContainer.Instance?.InUse == true, 3);
+        Check("clicking a slot opens that pile", PileViewer.DescribeOpenView().Contains("Draw pile of player 1000"), PileViewer.DescribeOpenView());
+        PileViewer.SimulatePress(PileViewer.StripIndexOf(mutator.NetId), PileType.Draw);
+        await WaitUntil(() => NCapstoneContainer.Instance?.InUse != true, 3);
+        Check("clicking it again closes it", NCapstoneContainer.Instance?.InUse != true);
+
+        if (PileViewer.SlotRect(MutatorId, PileType.Discard) is Rect2 slot)
+        {
+            Vector2 start = slot.GetCenter();
+            await Mouse(start, true);
+            await Mouse(start + new Vector2(30f, -20f), null);
+            await Mouse(start + new Vector2(60f, -40f), null);
+            await Mouse(start + new Vector2(60f, -40f), false);
+            await Wait(0.2);
+            Check("dragging a strip moves it and opens nothing",
+                Settings.GetOffset(MutatorId).Length() > 50f && NCapstoneContainer.Instance?.InUse != true, $"offset {Settings.GetOffset(MutatorId)}");
+        }
+
+        // ---- F1 menu ----
+        SettingsMenu.Open();
+        SettingsMenu.ScaleSlider!.Value = 150;
+        await Wait(0.1);
+        Check("size slider scales the strips", Mathf.IsEqualApprox(PileViewer.StripScale(MutatorId).X, 1.5f), $"{PileViewer.StripScale(MutatorId)}");
+        SettingsMenu.ScaleSlider.Value = 100;
+        SettingsMenu.ResetPositionButton!.EmitSignal(BaseButton.SignalName.Pressed);
+        Check("reset strip positions", Settings.GetOffset(MutatorId) == Vector2.Zero);
+        SettingsMenu.EnabledToggle!.ButtonPressed = false;
+        await Wait(0.2);
+        Check("pile viewer off hides the strips but keeps the hand", PileViewer.StripCounts(MutatorId) == null && HandViewer.ShownCards().Count > 0);
+        SettingsMenu.EnabledToggle.ButtonPressed = true;
+        await Wait(0.2);
+
+        // ---- Hotkeys ----
+        int row = MutatorRow;
+        int discardSlot = Array.IndexOf(Hotkeys.Slots, PileType.Discard);
+        SelectHotkeyRow(row);
+        SettingsMenu.GetHotkeyButton(PileType.Draw)!.EmitSignal(BaseButton.SignalName.Pressed);
+        await PressRowKey(row, Key.C);
+        Check("conflicting binding is not saved", Hotkeys.Active[row, 0]?.ToString() == RowKey(row, "Z") && SettingsMenu.HotkeyStatus.StartsWith("Not saved"), SettingsMenu.HotkeyStatus);
+        SettingsMenu.GetHotkeyButton(PileType.Discard)!.EmitSignal(BaseButton.SignalName.Pressed);
+        await PressRowKey(row, Key.B);
+        Check("resolving the conflict saves both", Hotkeys.Active[row, 0]?.ToString() == RowKey(row, "C")
+            && Hotkeys.Active[row, discardSlot]?.ToString() == RowKey(row, "B"));
+        SettingsMenu.GetHotkeyButton(PileType.Discard)!.EmitSignal(BaseButton.SignalName.Pressed);
+        await MouseButtonPress(MouseButton.Xbutton1);
+        Check("a mouse button can be bound", Hotkeys.Active[row, discardSlot]?.ToString() == "Mouse 4");
+        Check("menu shows the version", SettingsMenu.VersionText.StartsWith("v0."), SettingsMenu.VersionText);
+        SettingsMenu.Close();
+        await MouseButtonPress(MouseButton.Xbutton1);
+        await WaitUntil(() => NCapstoneContainer.Instance?.InUse == true, 2);
+        Check("mouse-button hotkey opens the pile", PileViewer.DescribeOpenView().Contains("Discard pile of player 1000"), PileViewer.DescribeOpenView());
+        await MouseButtonPress(MouseButton.Xbutton1);
+        await PressRowKey(row, Key.C);
+        await WaitUntil(() => NCapstoneContainer.Instance?.InUse == true, 2);
+        Check("key hotkey opens the pile", PileViewer.DescribeOpenView().Contains("Draw pile of player 1000"), PileViewer.DescribeOpenView());
+        await PressRowKey(row, Key.C);
+        NDevConsole.Instance.ShowConsole();
+        await PressRowKey(row, Key.C);
+        Check("hotkeys are ignored while the console is open", NCapstoneContainer.Instance?.InUse != true);
+        NDevConsole.Instance.HideConsole();
+        Hotkeys.ResetDefaults(hand: false);
+
+        // ---- Hand: default view and rendering ----
+        Check("teammate's hand shown by default (lowest player number)", HandViewer.ViewedNetId == teammates[0].player.NetId, $"{HandViewer.ViewedNetId}");
+        HandViewer.View(MutatorId);
+        await Wait(0.3);
+        var cards = HandViewer.ShownCards();
+        var hand = PileType.Hand.GetPile(mutator).Cards;
+        Check("every card of their hand is drawn, in order", cards.Select(c => c.Model).SequenceEqual(hand), $"{cards.Count} of {hand.Count}");
+        var wrongCost = cards.Where(c => !c.Model.EnergyCost.CostsX && c.Model.EnergyCost.GetWithModifiers(CostModifiers.All) >= 0
+            && c.Cost != c.Model.EnergyCost.GetWithModifiers(CostModifiers.All).ToString()).Select(c => $"{c.Model.Id.Entry}={c.Cost}").ToList();
+        Check("costs drawn from their state", wrongCost.Count == 0, string.Join(", ", wrongCost));
+
+        // ---- Hide hand ----
+        HandViewer.HideButton?.EmitSignal(BaseButton.SignalName.Pressed);
+        await Wait(0.1);
+        Check("Hide hand hides your hand", HandViewer.HideOwnHand && NPlayerHand.Instance!.CardHolderContainer.Modulate.A < 0.01f);
+        HandViewer.HideButton?.EmitSignal(BaseButton.SignalName.Pressed);
+        Settings.HideHandButtonEnabled = false;
+        await Wait(0.1);
+        await PressKey(Key.H);
+        bool hidden = HandViewer.HideOwnHand;
+        await PressKey(Key.H);
+        Check("H works with the button hidden", hidden && !HandViewer.HideOwnHand);
+        Settings.HideHandButtonEnabled = true;
+        Settings.ShowSelf = true;
+        await Wait(0.2);
+        PileViewer.SimulatePress(PileViewer.StripIndexOf(me.NetId), PileType.Hand);
+        Check("your own strip's eye = Hide hand, teammate view kept", HandViewer.HideOwnHand && HandViewer.ViewedNetId == MutatorId);
+        PileViewer.SimulatePress(PileViewer.StripIndexOf(me.NetId), PileType.Hand);
+        Settings.ShowSelf = false;
+        await Wait(0.2);
+
+        // ---- Hover delay, closeup ----
+        Vector2 Peek(int i) => HandViewer.PeekPoint(i)!.Value;
+        Settings.HoverDelay = 0.4f;
+        await Mouse(away, null);
+        await Wait(0.4);
+        await Mouse(Peek(1), null);
+        await Wait(0.1);
+        Check("hover waits for the delay", HandViewer.HoveredId != null && HandViewer.CloseupId == null, HandViewer.DescribeHover());
+        await Wait(0.5);
+        Check("closeup after the delay", HandViewer.CloseupId != null && HandViewer.CloseupId == HandViewer.HoveredId, HandViewer.DescribeHover());
+        if (HandViewer.CloseupGeometry() is { } g)
+        {
+            (float bottom, float ownTop, float modulate) = g;
+            float lifted = (1f - 0.6f * Settings.HandShadowWhenHidden) / (1f - 0.6f * Settings.HandShadow);
+            // Above your cards under it, or (by design) down to just below the mouse so it never slips out from under it.
+            float limit = Mathf.Max(ownTop, HandViewer.LastMouse.Y + 4f) + 2f;
+            Check("closeup sits above your hand", bottom <= limit, $"bottom {bottom:0}, your cards {ownTop:0}, mouse {HandViewer.LastMouse.Y:0}");
+            Check("closeup uses the 'when hand hidden' shadow", Mathf.Abs(modulate - lifted) < 0.02f, $"{modulate:0.00} vs {lifted:0.00}");
+        }
+        await Mouse(Peek(2), null);
+        await Wait(0.1);
+        Check("moving sideways is immediate", HandViewer.CloseupId != null && HandViewer.CloseupId == HandViewer.HoveredId, HandViewer.DescribeHover());
+        await Mouse(away, null);
+        await Wait(0.4);
+        await Mouse(Peek(3), null);
+        await Mouse(Peek(3), true);
+        await Mouse(Peek(3), false);
+        Check("click skips the delay", HandViewer.CloseupId != null, HandViewer.DescribeHover());
+        await Mouse(away, null);
+        Settings.HoverDelay = 0.1f;
+        await Wait(0.4);
+
+        // ---- Your own card play wins ----
+        if (NPlayerHand.Instance!.ActiveHolders.FirstOrDefault() is NHandCardHolder own)
+        {
+            Vector2 start = own.Hitbox.GetGlobalRect().GetCenter();
+            await Mouse(start, null);
+            await Mouse(start, true);
+            for (int i = 1; i <= 5; i++) await Mouse(start + new Vector2(0f, -35f * i), null);
+            await Mouse(Peek(1), null);
+            await Wait(0.2);
+            Check("teammate cards ignore the mouse while you play a card", HandViewer.InputBlocked && HandViewer.HoveredId == null, HandViewer.DescribeHover());
+            await RightClick(Peek(1));
+            await Mouse(Peek(1), false);
+            await Mouse(away, null);
+            await WaitUntil(() => !HandViewer.InputBlocked, 3);
+            Check("and respond again afterwards", !HandViewer.InputBlocked);
+        }
+
+        // ---- Aim preview (Vulnerable on the enemy changes the number) ----
+        Send(me, $"power {Id<VulnerablePower>(ModelDb.AllPowers)} 2 {CreatureIndex(FirstEnemy)}");
+        await WaitUntil(() => FirstEnemy.Powers.Any(p => p is VulnerablePower), 5);
+        int attack = HandViewer.MiddleIndexOf(c => c.TargetType == TargetType.AnyEnemy && c.DynamicVars.ContainsKey("Damage"));
+        if (Check("teammate has a single-target attack", attack >= 0))
+        {
+            int energy = mutator.PlayerCombatState!.Energy, count = hand.Count, said = PileViewer.SaidCount;
+            Vector2 from = Peek(attack);
+            Vector2 to = NCombatRoom.Instance!.GetCreatureNode(FirstEnemy)!.Hitbox.GetGlobalRect().GetCenter();
+            await Mouse(from, null);
+            await Mouse(from, true);
+            for (int i = 1; i <= 6; i++) await Mouse(from.Lerp(to, i / 6f), null);
+            await Wait(0.3);
+            string aimed = HandViewer.DescribeDragCard();
+            Check("dragging a teammate card aims with the game's arrow", HandViewer.IsAiming, aimed);
+            Check("aimed numbers include the target's Vulnerable", aimed.Contains("[green]"), aimed);
+            await Mouse(to, false);
+            await Wait(0.3);
+            Check("letting go plays nothing", !HandViewer.IsDragging && hand.Count == count && mutator.PlayerCombatState.Energy == energy);
+            Check("…and says it's their card", PileViewer.SaidCount > said);
+            await Mouse(away, null);
+        }
+
+        if (Full) await ObserverFull(me, mutator, teammates, away);
+    }
+
+    private static async Task ObserverFull(Player me, Player mutator, List<(int number, Player player)> teammates, Vector2 away)
+    {
+        Vector2 Peek(int i) => HandViewer.PeekPoint(i)!.Value;
+        HandViewer.View(MutatorId);
+
+        // ---- Accuracy vs the teammate's own screen (REF1/VIEW1 compared by the runner) ----
+        int mi = CreatureIndex(mutator.Creature);
+        Send(me, $"power {Id<StrengthPower>(ModelDb.AllPowers)} 3 {mi}");
+        Send(me, $"power {Id<WeakPower>(ModelDb.AllPowers)} 2 {mi}");
+        await WaitUntil(() => mutator.Creature.Powers.Any(p => p is WeakPower), 5);
+        if (await Ask(1))
+        {
+            await Wait(0.8);
+            foreach (string line in HandViewer.DumpTeammateCards()) Log("VIEW1 " + line);
+
+            // Beat Into Shape: Forge counts the *teammate's* hits on that enemy this turn.
+            int bis = HandViewer.IndexOf(c => c is BeatIntoShape);
+            if (Check("Beat Into Shape in their hand", bis >= 0))
+            {
+                CardModel model = PileType.Hand.GetPile(mutator).Cards.First(c => c is BeatIntoShape);
+                decimal forge = ((CalculatedVar)model.DynamicVars["CalculatedForge"]).Calculate(FirstEnemy);
+                Vector2 from = Peek(bis), to = NCombatRoom.Instance!.GetCreatureNode(FirstEnemy)!.Hitbox.GetGlobalRect().GetCenter();
+                await Mouse(from, null);
+                await Wait(0.2);
+                string hover = $"from {from} {HandViewer.DescribeHover()}";
+                await Mouse(from, true);
+                for (int i = 1; i <= 6; i++) await Mouse(from.Lerp(to, i / 6f), null);
+                await Wait(0.3);
+                string text = HandViewer.DescribeDragCard();
+                var m = System.Text.RegularExpressions.Regex.Match(text, @"Forge\[/gold\] (?:\[\w+\])?(\d+)");
+                Check("Beat Into Shape forges for the teammate's hits", forge > 5 && m.Success && m.Groups[1].Value == forge.ToString("0"), $"expected {forge}, card: {text} ({hover})");
+                await RightClick(to);
+                await Mouse(to, false);
+                await Mouse(away, null);
+                await Wait(0.3);
+            }
+            int slash = HandViewer.IndexOf(c => c is EchoingSlash);
+            if (Check("Echoing Slash in their hand", slash >= 0))
+            {
+                string before = HandViewer.DumpTeammateCards().First(l => l.StartsWith("ECHOING_SLASH"));
+                Vector2 from = Peek(slash);
+                await Mouse(from, null);
+                await Wait(0.2);
+                string hover = $"from {from} {HandViewer.DescribeHover()}";
+                await Mouse(from, true);
+                for (int i = 1; i <= 6; i++) await Mouse(from.Lerp(new Vector2(960f, 350f), i / 6f), null);
+                await Wait(0.3);
+                string aimed = HandViewer.DescribeDragCard();
+                Check("all-enemies preview shows the Vulnerable number", aimed != before && aimed.Contains("[green]"), $"{before} → {aimed} ({hover})");
+                await RightClick(new Vector2(960f, 350f));
+                await Mouse(new Vector2(960f, 350f), false);
+                await Mouse(away, null);
+                await Wait(0.3);
+            }
+        }
+
+        // ---- Glow follows their turn and energy ----
+        if (await Ask(2))
+        {
+            await Wait(0.4);
+            Check("no glow once they've ended their turn", HandViewer.ShownCards().All(c => c.Glow == "-"), HandViewer.DescribeTeammateGlow());
+        }
+        if (await Ask(3))
+        {
+            await Wait(0.4);
+            Check("glow back after they undo it", HandViewer.ShownCards().Any(c => c.Glow == "playable"), HandViewer.DescribeTeammateGlow());
+        }
+        if (await Ask(4))
+        {
+            await Wait(1.0);
+            Log($"VIEW2 energy={mutator.PlayerCombatState!.Energy} {HandViewer.DescribeTeammateGlow()}");
+        }
+
+        // ---- Hotkey regressions ----
+        int row = MutatorRow;
+        SettingsMenu.Open();
+        SelectHotkeyRow(row);
+        SettingsMenu.GetHotkeyButton(PileType.Draw)!.EmitSignal(BaseButton.SignalName.Pressed);
+        await PressRowKey(row, Key.S);
+        Check("a game key saves with a warning", Hotkeys.Active[row, 0]?.ToString() == RowKey(row, "S") && SettingsMenu.HotkeyStatus.Contains("used by the game"), SettingsMenu.HotkeyStatus);
+        SettingsMenu.Close();
+        await PressRowKey(row, Key.S);
+        Check("…and the game keeps the key", !PileViewer.DescribeOpenView().Contains("player 1000"), PileViewer.DescribeOpenView());
+        if (NCapstoneContainer.Instance?.InUse == true) await PressKey(Key.Escape);
+        var mkb = (Dictionary<StringName, Key>)Traverse.Create(NInputManager.Instance!).Field("_mKbInputMap").GetValue();
+        var movedOffD = mkb.Where(kv => kv.Value == Key.D).Select(kv => kv.Key).ToList();
+        foreach (StringName action in movedOffD) mkb[action] = Key.P;
+        SettingsMenu.Open();
+        SelectHotkeyRow(row);
+        SettingsMenu.GetHotkeyButton(PileType.Draw)!.EmitSignal(BaseButton.SignalName.Pressed);
+        await PressRowKey(row, Key.D);
+        Check("a key the game no longer uses is free", Hotkeys.Active[row, 0]?.ToString() == RowKey(row, "D") && !SettingsMenu.HotkeyStatus.Contains("used by the game"), SettingsMenu.HotkeyStatus);
+        SettingsMenu.Close();
+        await PressRowKey(row, Key.D);
+        await WaitUntil(() => NCapstoneContainer.Instance?.InUse == true, 2);
+        Check("…and fires", PileViewer.DescribeOpenView().Contains("Draw pile of player 1000"), PileViewer.DescribeOpenView());
+        await PressRowKey(row, Key.D);
+        foreach (StringName action in movedOffD) mkb[action] = Key.D;
+        if (teammates.Count < Hotkeys.MaxTeammates)
+        {
+            int absent = Hotkeys.MaxTeammates - 1; // last row: no such teammate in a 2-3 player game
+            SettingsMenu.Open();
+            SelectHotkeyRow(row);
+            SettingsMenu.GetHotkeyButton(PileType.Draw)!.EmitSignal(BaseButton.SignalName.Pressed);
+            await PressRowKey(absent, Key.Z);
+            Check("duplicate with an absent teammate saves with a warning", Hotkeys.Active[row, 0]?.ToString() == RowKey(absent, "Z") && SettingsMenu.HotkeyStatus.Contains("gets it"), SettingsMenu.HotkeyStatus);
+            SettingsMenu.Close();
+        }
+        Hotkeys.ResetDefaults(hand: false);
+        HandViewer.View(null);
+        await PressRowKey(row, Key.H);
+        Check("hand hotkey shows that teammate's hand", HandViewer.ViewedNetId == MutatorId);
+        await PressRowKey(row, Key.H);
+        Check("…and hides it again", HandViewer.ViewedNetId == null);
+
+        // ---- Hover delay ends ----
+        HandViewer.View(MutatorId);
+        await Wait(0.3);
+        Settings.HoverDelay = Settings.MaxHoverDelay;
+        await Mouse(away, null);
+        await Wait(0.4);
+        await Mouse(Peek(0), null);
+        await Wait(0.6);
+        Check("hover delay at max = disabled", HandViewer.HoveredId != null && HandViewer.CloseupId == null, HandViewer.DescribeHover());
+        await Mouse(away, null);
+        await Wait(0.4);
+        Settings.HoverDelay = 0f;
+        await Mouse(Peek(0), null);
+        await Wait(0.05);
+        Check("hover delay at 0 = instant", HandViewer.CloseupId != null, HandViewer.DescribeHover());
+        await Mouse(away, null);
+        Settings.HoverDelay = 0.1f;
+
+        // ---- 3rd player (REF3/VIEW3 compared by the runner) ----
+        if (teammates.FirstOrDefault(t => t.player.NetId == 1001).player is Player third)
+        {
+            PileViewer.SimulatePress(PileViewer.StripIndexOf(1001), PileType.Hand);
+            await Wait(0.5);
+            Check("eye switches to another teammate", HandViewer.ViewedNetId == 1001);
+            foreach (string line in HandViewer.DumpTeammateCards()) Log("VIEW3 " + line);
+            HandViewer.View(MutatorId);
+        }
+
+        // ---- Next fight: whose hand is shown carries over, Hide hand resets ----
+        HandViewer.View(null);
+        if (!HandViewer.HideOwnHand) HandViewer.ToggleHideOwnHand();
+        Send(me, "win");
+        await WaitUntil(() => !CombatManager.Instance.IsInProgress, 20);
+        await Wait(1.5);
+        Send(me, "fight " + PickEncounter().Id.Entry, inCombat: false);
+        await WaitUntil(() => CombatManager.Instance.IsInProgress, 30);
+        await Wait(1.0);
+        Check("next fight keeps the choice (nobody) and shows your hand",
+            CombatManager.Instance.IsInProgress && HandViewer.ViewedNetId == null && !HandViewer.HideOwnHand,
+            $"viewing={HandViewer.ViewedNetId?.ToString() ?? "nobody"} hideOwnHand={HandViewer.HideOwnHand}");
+    }
+
+    private static async Task PressKey(Key key, bool shift = false, bool ctrl = false)
+    {
+        // Inject through Godot's input pipeline (same route as a physical key press), so this also checks
+        // that the NGame._Input patch sees the key and nothing upstream swallows it.
+        var down = new InputEventKey { Keycode = key, PhysicalKeycode = key, ShiftPressed = shift, CtrlPressed = ctrl, Pressed = true };
+        var up = new InputEventKey { Keycode = key, PhysicalKeycode = key, ShiftPressed = shift, CtrlPressed = ctrl, Pressed = false };
+        Input.ParseInputEvent(down);
+        await Wait(0.05);
+        Input.ParseInputEvent(up);
+        await Wait(0.15);
     }
 
     /// <summary>Real mouse event at a viewport position (converted to window pixels): press/release, or motion if null.</summary>
@@ -973,204 +860,12 @@ public static class AutoTest
                 ButtonMask = p ? MouseButtonMask.Left : 0 }
             : new InputEventMouseMotion { Position = point, GlobalPosition = point, ButtonMask = MouseButtonMask.Left };
         Input.ParseInputEvent(ev);
-        await Wait(0.2);
-    }
-
-    /// <summary>
-    /// hv6: the mutator applies effects that change card numbers and costs (Strength, Dexterity, Weak, Frail,
-    /// Snecko Eye + draws, Spiked Gauntlets, a Sharp enchant, playing Enlightenment), all through networked actions.
-    /// Then both sides log every hand card's rendered cost and description: the mutator from the game's own hand,
-    /// the observer from the Hand Viewer. The two lists must match line for line.
-    /// </summary>
-    private static async Task ExerciseAccuracy(bool mutator, bool observer)
-    {
-        await Wait(1.0);
-        string Power<T>() => ModelDb.AllPowers.First(p => p is T).Id.Entry;
-        string Relic<T>() => ModelDb.AllRelics.First(r => r is T).Id.Entry;
-        string enlightenment = ModelDb.AllCards.First(c => c is Enlightenment).Id.Entry;
-
-        if (mutator)
-        {
-            CombatState combat = CombatManager.Instance.DebugOnlyGetState()!;
-            Player me = LocalContext.GetMe(RunManager.Instance.DebugOnlyGetState()!)!;
-            int myIndex = combat.Creatures.ToList().IndexOf(me.Creature);
-
-            await Enqueue(me, $"power {Power<StrengthPower>()} 3 {myIndex}", $"power {Power<DexterityPower>()} 2 {myIndex}");
-            await Wait(2.0);
-            DumpReference("A (Strength 3, Dexterity 2)");
-            await Wait(5.0);
-
-            await Enqueue(me, $"power {Power<WeakPower>()} 2 {myIndex}", $"power {Power<FrailPower>()} 2 {myIndex}");
-            await Wait(2.0);
-            DumpReference("B (+ Weak 2, Frail 2)");
-            await Wait(5.0);
-
-            // Make room, then cost changers: Snecko Eye randomizes the cost of drawn cards; Sharp on an attack.
-            var hand = PileType.Hand.GetPile(me).Cards.ToList();
-            await Enqueue(me, $"remove_card {hand[^1].Id.Entry}", $"remove_card {hand[^2].Id.Entry}",
-                $"remove_card {hand[^3].Id.Entry}", $"remove_card {hand[^4].Id.Entry}",
-                $"relic {Relic<SneckoEye>()}", $"relic {Relic<SpikedGauntlets>()}", "draw 3");
-            int strikeIndex = PileType.Hand.GetPile(me).Cards.ToList().FindIndex(c => c.Type == CardType.Attack);
-            await Enqueue(me, $"enchant {ModelDb.Enchantment<Sharp>().Id.Entry} 2 {Math.Max(strikeIndex, 0)}");
-            await Wait(2.0);
-            DumpReference("C (+ Snecko Eye draws, Spiked Gauntlets, Sharp)");
-            await Wait(5.0);
-
-            // Enlightenment: cards in hand cost at most 1 this turn.
-            await Enqueue(me, $"card {enlightenment}");
-            await Wait(1.0);
-            if (PileType.Hand.GetPile(me).Cards.FirstOrDefault(c => c is Enlightenment) is CardModel played)
-            {
-                RunManager.Instance.ActionQueueSynchronizer.RequestEnqueue(new PlayCardAction(played, null));
-                Log("hv6: mutator played Enlightenment");
-            }
-            await Wait(2.5);
-            DumpReference("D (+ played Enlightenment)");
-        }
-
-        if (observer)
-        {
-            Player? teammate = PileViewer.Teammates().Select(t => t.player).FirstOrDefault(p => p.NetId == 1000);
-            if (teammate == null) return;
-            bool Has<T>() => teammate.Creature.Powers.Any(p => p is T);
-            await WaitUntil(() => Has<StrengthPower>() && Has<DexterityPower>(), 20);
-            await Wait(1.5);
-            DumpViewer("A");
-            await WaitUntil(() => Has<WeakPower>() && Has<FrailPower>(), 20);
-            await Wait(1.5);
-            DumpViewer("B");
-            await WaitUntil(() => teammate.Relics.Any(r => r is SneckoEye)
-                && PileType.Hand.GetPile(teammate).Cards.Any(c => c.Enchantment is Sharp), 30);
-            await Wait(1.5);
-            DumpViewer("C");
-            await WaitUntil(() => !PileType.Hand.GetPile(teammate).Cards.Any(c => c is Enlightenment)
-                && SlotPilesHave(teammate, c => c is Enlightenment), 30);
-            await Wait(2.0);
-            DumpViewer("D");
-        }
-    }
-
-    private static bool SlotPilesHave(Player player, Func<CardModel, bool> match) =>
-        PileViewer.SlotPiles.Any(p => p.GetPile(player).Cards.Any(match));
-
-    private static async Task Enqueue(Player me, params string[] commands)
-    {
-        foreach (string cmd in commands)
-        {
-            RunManager.Instance.ActionQueueSynchronizer.RequestEnqueue(new ConsoleCmdGameAction(me, cmd, inCombat: true));
-            Log($"hv6: mutator enqueued '{cmd}'");
-            await Wait(0.6);
-        }
+        await Wait(0.05);
     }
 
     private static async Task WaitUntil(Func<bool> condition, double timeoutSeconds)
     {
-        for (double t = 0; t < timeoutSeconds && !condition(); t += 0.25) await Wait(0.25);
-    }
-
-    private static void DumpReference(string phase)
-    {
-        var mine = HandViewer.DumpOwnHand();
-        Log($"hv6: REFERENCE {phase} ({mine.Count})");
-        foreach (string line in mine) Log($"hv6: ref{phase[0]} {line}");
-    }
-
-    private static void DumpViewer(string phase)
-    {
-        var seen = HandViewer.DumpTeammateCards();
-        Log($"hv6: VIEWER {phase} ({seen.Count})");
-        foreach (string line in seen) Log($"hv6: view{phase[0]} {line}");
-    }
-
-    /// <summary>hv5: point the mouse at teammate cards (through the real input pipeline) and check the native closeup.</summary>
-    private static async Task ExerciseCloseups()
-    {
-        await Wait(1.0);
-        foreach (int index in new[] { 3, 0, 5 })
-        {
-            if (HandViewer.CardCenter(index) is not Vector2 target) continue;
-            // Viewport (1920x1080 design) → window pixels.
-            var tree = (SceneTree)Engine.GetMainLoop();
-            Viewport vp = tree.Root;
-            Vector2 window = (Vector2)DisplayServer.WindowGetSize();
-            Vector2 factor = window / vp.GetVisibleRect().Size;
-            // Aim at the visible top strip of the card (the rest is behind your own hand).
-            Vector2 point = new Vector2(target.X, target.Y - 120f) * factor;
-            Input.ParseInputEvent(new InputEventMouseMotion { Position = point, GlobalPosition = point });
-            await Wait(0.8);
-            Log($"hv5: hover card #{index} → closeup {HandViewer.DescribeFocus()}");
-        }
-        Log("hv5: " + HandViewer.DescribeCards());
-    }
-
-    private static async Task WatchHand(int seconds)
-    {
-        for (int i = 0; i < seconds; i++)
-        {
-            Log($"hv3: watch t+{i}s: {HandViewer.CurrentText}");
-            if (i % 3 == 0) Log($"hv4: t+{i}s: {HandViewer.DescribeCards()} | my index labels y: {HandViewer.DescribeIndexLabels()}");
-            await Wait(1.0);
-        }
-    }
-
-    /// <summary>hv2: the strip's Hand (eye) slot, one-teammate-at-a-time toggling, the Hide hand button, the F1 tab.</summary>
-    private static async Task ExerciseHandViewerUi()
-    {
-        Log("hv2: strips: " + PileViewer.DescribeState());
-        Log("hv2: hand slots: " + PileViewer.DescribeHandSlots());
-        Log("hv2: start: " + HandViewer.DescribeState());
-
-        PileViewer.SimulatePress(0, PileType.Hand);
-        await Wait(0.5);
-        Log("hv2: eye on strip 0 → " + HandViewer.DescribeState());
-        if (PileViewer.Teammates().Count >= 2)
-        {
-            PileViewer.SimulatePress(1, PileType.Hand);
-            await Wait(0.5);
-            Log("hv2: eye on strip 1 (should switch) → " + HandViewer.DescribeState());
-            PileViewer.SimulatePress(1, PileType.Hand);
-        }
-        else
-        {
-            PileViewer.SimulatePress(0, PileType.Hand);
-        }
-        await Wait(0.5);
-        Log("hv2: eye again (should close) → " + HandViewer.DescribeState());
-
-        HandViewer.HideButton?.EmitSignal(BaseButton.SignalName.Pressed);
-        await Wait(0.5);
-        Log("hv2: hide-hand pressed → " + HandViewer.DescribeState());
-        HandViewer.HideButton?.EmitSignal(BaseButton.SignalName.Pressed);
-        await Wait(0.5);
-        Log("hv2: hide-hand pressed again → " + HandViewer.DescribeState());
-
-        SettingsMenu.Open();
-        SettingsMenu.Tabs!.CurrentTab = 1;
-        await Wait(0.5);
-        SettingsMenu.HandVisibleSlider!.Value = 45;
-        SettingsMenu.HandShadowSlider!.Value = 70;
-        Log($"hv2: menu tab '{SettingsMenu.Tabs.GetTabTitle(SettingsMenu.Tabs.CurrentTab)}': visible={Settings.HandVisible} shadow={Settings.HandShadow}");
-        PileViewer.SimulatePress(0, PileType.Hand);
-        SettingsMenu.HandViewerToggle!.ButtonPressed = false;
-        await Wait(0.5);
-        Log($"hv2: Hand Viewer off → slots {PileViewer.DescribeHandSlots()}; {HandViewer.DescribeState()}");
-        SettingsMenu.HandViewerToggle.ButtonPressed = true;
-        await Wait(0.5);
-        Log($"hv2: Hand Viewer on → slots {PileViewer.DescribeHandSlots()}; {HandViewer.DescribeState()}");
-        SettingsMenu.HandVisibleSlider.Value = 25; // back to the defaults for the rest of the suite
-        SettingsMenu.HandShadowSlider.Value = 50;
-        PileViewer.SimulatePress(0, PileType.Hand); // leave a hand view on + menu open for the screenshot
-        await Wait(0.5);
-        Log("hv2: final → " + HandViewer.DescribeState());
-    }
-
-    private static async Task WatchCounts(int seconds)
-    {
-        for (int i = 0; i < seconds; i++)
-        {
-            Log($"watch t+{i}s: {PileViewer.DescribeState()}");
-            await Wait(1.0);
-        }
+        for (double t = 0; t < timeoutSeconds && !condition(); t += 0.05) await Wait(0.05);
     }
 
     private static EncounterModel PickEncounter() =>
