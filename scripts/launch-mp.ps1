@@ -1,5 +1,6 @@
 # Launch a local multiplayer test: one host plus (Players - 1) clients.
-# Applies test settings first (windowed, steam_appid.txt) via test-settings.ps1.
+# Applies test settings first (windowed, steam_appid.txt, dev build installed) via test-settings.ps1;
+# run `test-settings.ps1 -Mode restore` afterwards to go back to normal play (Workshop subscription).
 param(
     [int]$Players = 2,
     [string]$GameDir = 'C:\Program Files (x86)\Steam\steamapps\common\Slay the Spire 2',

@@ -54,6 +54,11 @@ Logs: `%APPDATA%\SlayTheSpire2\spire2pileviewer_{host,1000,…}_log.txt`; game c
 
 Manual: `scripts/launch-mp.ps1 -Players 2` (no autotest) and click through.
 
+Dev vs. play: the dev build lives in `<game>\mods\Spire2PileViewer` only while testing. `test-settings.ps1 -Mode
+apply` (run by every launch script) installs it; `-Mode restore` (run at the end of automated tests) removes it,
+so normal play uses the Workshop subscription. With both present the game loads the higher version (the local
+copy on a tie), so keep the dev version >= the published one.
+
 Flags: `-pileviewerself` shows a strip over the local player too;
 `-pileviewerplayers N`; `-pileviewershowcase` stages README screenshots (`scripts/dev-showcase.ps1`; the first
 client logs SHOT 1/2/3 — disable BetterSpire2 in settings.save mod_list first for clean shots).
