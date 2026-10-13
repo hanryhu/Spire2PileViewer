@@ -28,7 +28,7 @@ if (Test-Path $dotnet) {
 else {
     Write-Host "No .NET 9 SDK at $dotnet - testing the existing build in src\bin\Debug." -ForegroundColor Yellow
 }
-& (Join-Path $PSScriptRoot 'install-local.ps1') -GameDir $GameDir | Out-Null
+# launch-mp applies the test settings, which installs the dev build; the restore at the end removes it.
 & (Join-Path $PSScriptRoot 'launch-mp.ps1') -Players $Players -GameDir $GameDir -VanillaSide $VanillaSide -QuietConsole `
     -ExtraArgs '-pileviewerautotest', '-pileviewerplayers', $Players, '-autotestsuite', $Suite
 

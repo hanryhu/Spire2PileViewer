@@ -11,6 +11,5 @@ if (Get-Process SlayTheSpire2 -ErrorAction SilentlyContinue) {
     Write-Error 'Close the game first (the mod DLL is locked while it runs).'
     exit 1
 }
-& (Join-Path $PSScriptRoot 'install-local.ps1') -GameDir $GameDir
 & (Join-Path $PSScriptRoot 'launch-mp.ps1') -Players $Players -GameDir $GameDir `
     -ExtraArgs '-pileviewerautotest', '-pileviewershowcase', '-pileviewerplayers', $Players
