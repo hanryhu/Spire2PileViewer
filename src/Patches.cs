@@ -14,7 +14,9 @@ public static class Patches
         typeof(CombatWinPatch),
         typeof(CombatLosePatch),
         typeof(ReturnToMainMenuPatch),
-        typeof(AutoTest.LobbyReadyPatch),
+#if DEBUG
+        typeof(AutoTest.LobbyReadyPatch), // auto-test only; not in Release builds
+#endif
         typeof(SettingsMenu.InputPatch),
         typeof(SettingsMenu.HotkeyDispatchPatch),
     };
