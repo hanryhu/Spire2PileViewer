@@ -91,10 +91,15 @@ public static class Settings
     public static string DescribeOffsets() =>
         _offsets.Count == 0 ? "none" : string.Join(", ", _offsets.Select(kv => $"{kv.Key}={kv.Value}"));
 
+#if DEBUG
     // Auto-test runs use their own file (reset at start) so they never touch the player's real settings.
     private static string FilePath => Path.Combine(OS.GetUserDataDir(),
         AutoTest.Enabled ? "spire2pileviewer_settings_autotest.json" : "spire2pileviewer_settings.json");
+#else
+    private static string FilePath => Path.Combine(OS.GetUserDataDir(), "spire2pileviewer_settings.json");
+#endif
 
+#if DEBUG
     /// <summary>Auto-test only: start from defaults.</summary>
     internal static void ResetForAutoTest()
     {
@@ -108,6 +113,7 @@ public static class Settings
         }
         ResetAll();
     }
+#endif
 
     public static void Load()
     {
