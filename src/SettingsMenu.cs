@@ -465,7 +465,7 @@ public static class SettingsMenu
         _hideHandHotkeyStatus.AddThemeFontSizeOverride("font_size", 12);
         tab.AddChild(_hideHandHotkeyStatus);
 
-        ResetHideButtonPositionButton = AddButton(tab, "Reset \"show hand\" position", Settings.ResetHideButtonPosition);
+        ResetHideButtonPositionButton = AddButton(tab, "Reset \"hide hand\" position", Settings.ResetHideButtonPosition);
         ResetHandViewerButton = AddButton(tab, "Reset Hand Viewer settings", () =>
         {
             Settings.ResetHandViewer();
