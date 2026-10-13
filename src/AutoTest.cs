@@ -645,6 +645,19 @@ public static class AutoTest
         PileViewer.OpenTeammatePile(0, PileType.Discard); // close
         Hotkeys.ResetDefaults(hand: false);
         await Wait(1.0);
+
+        // Hide/show hand hotkey (H) still works with the button hidden.
+        Hotkeys.ResetDefaults(hand: true); // hv9 rebinds it to Shift+J
+        Settings.HideHandButtonEnabled = false;
+        await Wait(0.5);
+        await PressKey(Key.H);
+        await Wait(0.5);
+        Log($"feedback: button hidden, H → hideOwnHand={HandViewer.HideOwnHand} button visible={HandViewer.HideButton?.Visible}");
+        await PressKey(Key.H);
+        await Wait(0.5);
+        Log($"feedback: button hidden, H again → hideOwnHand={HandViewer.HideOwnHand}");
+        Settings.HideHandButtonEnabled = true;
+        await Wait(0.5);
     }
 
     private static async Task RightClick(Vector2 viewportPos)

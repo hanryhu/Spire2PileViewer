@@ -29,7 +29,7 @@ public static class Settings
         public bool hideHandButton { get; set; } = true;
         public float handShadow { get; set; } = 0.85f;
         public float handVisible { get; set; } = 0.20f;
-        public float hoverDelay { get; set; } = 0.5f;
+        public float hoverDelay { get; set; } = 0.1f;
         public float handShadowHidden { get; set; } = 0.15f;
         public float[]? hideButtonOffset { get; set; }
     }
@@ -61,9 +61,9 @@ public static class Settings
     public static float HandShadow = 0.85f;
 
     /// <summary>Seconds a teammate card must be hovered before its closeup shows (0 = instant, MaxHoverDelay = never).</summary>
-    public static float HoverDelay = 0.5f;
+    public static float HoverDelay = 0.1f;
 
-    public const float MaxHoverDelay = 2f;
+    public const float MaxHoverDelay = 1f;
 
     /// <summary>Drag offset of the "Hide hand" button from its default spot above the energy counter.</summary>
     public static Vector2 HideButtonOffset = Vector2.Zero;
@@ -207,7 +207,7 @@ public static class Settings
         HandShadow = 0.85f;
         HandVisible = 0.20f;
         HandShadowWhenHidden = 0.15f;
-        HoverDelay = 0.5f;
+        HoverDelay = 0.1f;
         HideButtonOffset = Vector2.Zero;
         Hotkeys.ResetDefaults(hand: true);
         Save();

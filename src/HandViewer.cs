@@ -75,7 +75,7 @@ public static class HandViewer
     /// <summary>Hotkey: hide/show your own hand (only while the Hide hand feature is on).</summary>
     internal static bool ToggleHideOwnHandHotkey()
     {
-        if (!Settings.HandViewerEnabled || !Settings.HideHandButtonEnabled) return false;
+        if (!Settings.HandViewerEnabled) return false; // works with the button hidden too
         ToggleHideOwnHand();
         return true;
     }
@@ -147,7 +147,6 @@ public static class HandViewer
         if (!show)
         {
             if (_hideButton != null && GodotObject.IsInstanceValid(_hideButton)) _hideButton.Visible = false;
-            if (!Settings.HideHandButtonEnabled && HideOwnHand) HideOwnHand = false;
             return;
         }
         if (_hideButton == null || !GodotObject.IsInstanceValid(_hideButton)) _hideButton = CreateHideButton(room);

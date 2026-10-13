@@ -442,8 +442,8 @@ public static class SettingsMenu
         HandShadowHiddenSlider = AddSlider(tab, "Teammate hand shadow (when hand hidden)", 0f, 100f,
             Settings.HandShadowWhenHidden * 100f, v => Settings.HandShadowWhenHidden = (float)v / 100f);
         HoverDelaySlider = AddSlider(tab, "Hover delay", 0f, Settings.MaxHoverDelay, Settings.HoverDelay,
-            v => Settings.HoverDelay = (float)v, step: 0.1,
-            format: v => v <= 0.001 ? "instant" : v >= Settings.MaxHoverDelay - 0.001 ? "disabled" : $"{v:0.0}s");
+            v => Settings.HoverDelay = (float)v, step: 0.05,
+            format: v => v <= 0.001 ? "instant" : v >= Settings.MaxHoverDelay - 0.001 ? "disabled" : $"{v:0.00}s");
         var hotkeyRow = new HBoxContainer();
         tab.AddChild(hotkeyRow);
         var hotkeyLabel = new Label { Text = "Hide/show hand hotkey", SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
