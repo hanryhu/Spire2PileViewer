@@ -1,6 +1,6 @@
 # Stage README screenshots: install the local build, then launch a 3-player game in showcase mode.
-# The first client logs "SHOT 1..5" (default view, F1 menu, a teammate's pile screen, their hand behind yours,
-# your hand hidden with a closeup of theirs) and holds each a few
+# The first client logs "SHOT 1..6" (default view, F1 menu, a teammate's pile screen, their hand behind yours,
+# your hand hidden with a closeup of theirs, aiming one of their cards) and holds each a few
 # seconds; capture that client window at each. Disable other UI mods first for clean shots.
 param(
     [int]$Players = 3,
