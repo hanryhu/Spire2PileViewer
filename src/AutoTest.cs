@@ -30,6 +30,7 @@ using MegaCrit.Sts2.Core.Helpers;
 using MegaCrit.Sts2.Core.Map;
 using MegaCrit.Sts2.Core.Models;
 using MegaCrit.Sts2.Core.Multiplayer.Game;
+using MegaCrit.Sts2.Core.Multiplayer.Game.PeerInput;
 using MegaCrit.Sts2.Core.Multiplayer.Game.Lobby;
 using MegaCrit.Sts2.Core.Nodes;
 using MegaCrit.Sts2.Core.Nodes.Debug;
@@ -170,6 +171,12 @@ public static class AutoTest
     /// </summary>
     private static readonly string Suite = ArgString("-autotestsuite", "fast");
 
+    /// <summary>-autotestskipfast (with full): leave out the fast checks (they ran separately).</summary>
+    private static readonly bool SkipFastChecks = OS.GetCmdlineArgs().Contains("-autotestskipfast");
+
+    /// <summary>-pileviewerharness: this instance runs only the test fixtures (no Pile Viewer patches).</summary>
+    internal static readonly bool Harness = OS.GetCmdlineArgs().Contains("-pileviewerharness");
+
     private static string ArgString(string name, string fallback)
     {
         string[] args = OS.GetCmdlineArgs();
@@ -185,6 +192,15 @@ public static class AutoTest
     }
 
     private static bool _started;
+
+    /// <summary>Peer-input messages this game sent (the game's cursor/hover/targeting sync), for the network check.</summary>
+    internal static int PeerInputSends;
+
+    [HarmonyPatch(typeof(PeerInputSynchronizer), "SendSyncMessage")]
+    public static class PeerInputSendPatch
+    {
+        private static void Postfix() => PeerInputSends++;
+    }
 
     [HarmonyPatch(typeof(NCharacterSelectScreen), "AfterInitialized")]
     public static class LobbyReadyPatch
@@ -393,11 +409,17 @@ public static class AutoTest
         }
         // Wait for the opening hand to be dealt and settle.
         await WaitUntil(() => NPlayerHand.Instance!.ActiveHolders.Count > 0 && NPlayerHand.Instance.ActiveHolders.Count == PileType.Hand.GetPile(Me).Cards.Count, 15);
-        await Wait(0.8);
+        await Wait(0.3);
         Log($"suite {Suite}: combat ready after {clock.Elapsed.TotalSeconds:0.0}s in this phase");
         try
         {
-            if (isHost) await Observer();
+            if (Suite == "harness")
+            {
+                if (isHost) await HarnessObserver();
+                else if (Me.NetId == MutatorId) await HarnessTeammate();
+                else await HarnessBystander();
+            }
+            else if (isHost) await Observer();
             else if (Me.NetId == MutatorId) await Mutator();
             else if (Full) await StaticReference();
         }
@@ -611,7 +633,21 @@ public static class AutoTest
             string.Join("; ", problems));
         _mutatorGold0 = mutator.Gold;
         Vector2 away = new(960f, 300f);
+        if (SkipFastChecks)
+        {
+            // Full checks only: they still need the Vulnerable the fast checks' aim preview puts on the enemy.
+            Send(me, $"power {Id<VulnerablePower>(ModelDb.AllPowers)} 2 {CreatureIndex(FirstEnemy)}");
+            await WaitUntil(() => FirstEnemy.Powers.Any(p => p is VulnerablePower), 5);
+        }
+        else
+        {
+            await ObserverFast(me, mutator, teammates, away);
+        }
+        if (Full) await ObserverFull(me, mutator, teammates, away);
+    }
 
+    private static async Task ObserverFast(Player me, Player mutator, List<(int number, Player player)> teammates, Vector2 away)
+    {
         // ---- Strips ----
         Check("a Pile Viewer for every teammate", teammates.All(t => PileViewer.StripCounts(t.player.NetId) != null), PileViewer.DescribeState());
         if (PileViewer.StripAndRow(MutatorId) is { } placed)
@@ -666,7 +702,8 @@ public static class AutoTest
         Check("empty-pile bubbles name the teammate", bubbles.All(b => b.StartsWith(owner + "'s ") && !b.Contains("My ")),
             string.Join(" | ", bubbles));
 
-        // The game briefly shows a teammate's newly obtained relics beside their name (over the Pile Viewer).
+        // The game briefly shows a teammate's newly obtained relics beside their name, drawn over the Pile Viewer, and
+        // they take the mouse where they're drawn (what you see is what you click): drag once they're gone.
         await WaitUntil(() => !PileViewer.RowAnimating(MutatorId), 10);
         if (PileViewer.SlotRect(MutatorId, PileType.Discard) is Rect2 slot)
         {
@@ -680,7 +717,8 @@ public static class AutoTest
             await Mouse(start + new Vector2(60f, -40f), false);
             await Wait(0.2);
             Check("dragging a Pile Viewer moves it and opens nothing",
-                Settings.GetOffset(MutatorId).Length() > 50f && NCapstoneContainer.Instance?.InUse != true, $"offset {Settings.GetOffset(MutatorId)}; {hit}");
+                Settings.GetOffset(MutatorId).Length() > 50f && NCapstoneContainer.Instance?.InUse != true,
+                $"offset {Settings.GetOffset(MutatorId)}; {hit}");
         }
 
         // ---- F1 menu ----
@@ -728,6 +766,10 @@ public static class AutoTest
             && Settings.CardSignals == Settings.CardSignalMode.ReceiveOnly && !Settings.SendsCardSignals && Settings.ReceivesCardSignals,
             $"{Settings.CardSignals}");
         SettingsMenu.CardSignalButtons[2].ButtonPressed = true;
+        SettingsMenu.MaxHandViewersButtons![1].ButtonPressed = true;
+        await Wait(0.05);
+        Check("Max Hand Viewers: 1 | 2 | 3 buttons", SettingsMenu.MaxHandViewersButtons.Length == 3 && Settings.MaxHandViewers == 2, $"{Settings.MaxHandViewers}");
+        SettingsMenu.MaxHandViewersButtons[0].ButtonPressed = true;
         await Wait(0.2);
         var (nativeCircle, ourCircle) = PileViewer.BadgeCircles(PileType.Draw);
         Check("bigger number badges, at most half the icon wide", ourCircle > nativeCircle * 1.1f && ourCircle <= PileViewer.SlotIconWidth / 2f + 0.01f,
@@ -809,13 +851,13 @@ public static class AutoTest
 
         // ---- Hover delay, closeup ----
         Vector2 Peek(int i) => HandViewer.PeekPoint(i)!.Value;
-        Settings.HoverDelay = 0.4f;
+        Settings.HoverDelay = 0.25f;
         await Mouse(away, null);
-        await Wait(0.4);
+        await Wait(0.3);
         await Mouse(Peek(1), null);
-        await Wait(0.1);
+        await Wait(0.05);
         Check("hover waits for the delay", HandViewer.HoveredId != null && HandViewer.CloseupId == null, HandViewer.DescribeHover());
-        await Wait(0.5);
+        await Wait(0.3);
         Check("closeup after the delay", HandViewer.CloseupId != null && HandViewer.CloseupId == HandViewer.HoveredId, HandViewer.DescribeHover());
         Check("hovering a teammate's card lights their frame", PileViewer.RowHighlighted(MutatorId), HandViewer.DescribeHover());
         if (HandViewer.CloseupGeometry() is { } g)
@@ -831,14 +873,14 @@ public static class AutoTest
         await Wait(0.1);
         Check("moving sideways is immediate", HandViewer.CloseupId != null && HandViewer.CloseupId == HandViewer.HoveredId, HandViewer.DescribeHover());
         await Mouse(away, null);
-        await Wait(0.4);
+        await Wait(0.3);
         await Mouse(Peek(3), null);
         await Mouse(Peek(3), true);
         await Mouse(Peek(3), false);
         Check("click skips the delay", HandViewer.CloseupId != null, HandViewer.DescribeHover());
         await Mouse(away, null);
         Settings.HoverDelay = 0.1f;
-        await Wait(0.4);
+        await Wait(0.3);
 
         // ---- Your own card play wins ----
         if (NPlayerHand.Instance!.ActiveHolders.FirstOrDefault() is NHandCardHolder own)
@@ -880,7 +922,6 @@ public static class AutoTest
             await Mouse(away, null);
         }
 
-        if (Full) await ObserverFull(me, mutator, teammates, away);
     }
 
     private static async Task ObserverFull(Player me, Player mutator, List<(int number, Player player)> teammates, Vector2 away)
@@ -960,12 +1001,13 @@ public static class AutoTest
         // ---- Glow follows their turn and energy ----
         if (await Ask(2))
         {
-            await Wait(0.4);
+            // Their end of turn reaches us shortly after their reply; the glow refreshes 4x a second.
+            await WaitUntil(() => HandViewer.ShownCards().All(c => c.Glow == "-"), 2);
             Check("no glow once they've ended their turn", HandViewer.ShownCards().All(c => c.Glow == "-"), HandViewer.DescribeTeammateGlow());
         }
         if (await Ask(3))
         {
-            await Wait(0.4);
+            await WaitUntil(() => HandViewer.ShownCards().Any(c => c.Glow == "playable"), 2);
             Check("glow back after they undo it", HandViewer.ShownCards().Any(c => c.Glow == "playable"), HandViewer.DescribeTeammateGlow());
         }
         if (await Ask(4))
@@ -1023,6 +1065,28 @@ public static class AutoTest
             Settings.HoverDelay = 0.1f;
             await Wait(0.3);
         }
+
+        // ---- Network: card signals ride on the game's own cursor messages (at most one per 50 ms) ----
+        async Task<int> Sweep(Settings.CardSignalMode mode)
+        {
+            Settings.CardSignals = mode;
+            Settings.HoverDelay = 0f;
+            await Mouse(away, null);
+            await Wait(0.3);
+            int before = PeerInputSends;
+            Vector2 left = HandViewer.PeekPointIn(MutatorId, rightmost: false)!.Value, right = HandViewer.PeekPointIn(MutatorId, rightmost: true)!.Value;
+            for (int i = 0; i <= 20; i++) await Mouse(left.Lerp(right, i / 20f), null);
+            for (int i = 20; i >= 0; i--) await Mouse(left.Lerp(right, i / 20f), null);
+            await Mouse(away, null);
+            await Wait(0.3);
+            return PeerInputSends - before;
+        }
+        int quiet = await Sweep(Settings.CardSignalMode.Off);
+        int signalling = await Sweep(Settings.CardSignalMode.SendAndReceive);
+        Settings.HoverDelay = 0.1f;
+        Log($"network: {quiet} peer-input messages with card signals off, {signalling} with Send + Receive (same 42 mouse moves across their cards)");
+        Check("card signals add no network messages (they ride on the game's cursor updates)", quiet > 0 && signalling <= quiet + 3,
+            $"{quiet} messages with signals off, {signalling} with Send + Receive, over 42 mouse moves across their cards");
 
         // ---- Hotkey regressions ----
         int row = MutatorRow;
@@ -1112,6 +1176,21 @@ public static class AutoTest
                 && !PileViewer.RowHighlighted(MutatorId), HandViewer.DescribeHover());
             await Mouse(away, null);
             await Wait(0.3);
+            // Sliding from one hand's card onto another hand's card starts the hover delay again.
+            Settings.HoverDelay = 0.4f;
+            await Mouse(HandViewer.PeekPointIn(MutatorId, rightmost: false)!.Value, null);
+            await Wait(0.6);
+            bool lowerShown = HandViewer.CloseupId != null && HandViewer.HoveredOwnerNetId == MutatorId;
+            await Mouse(HandViewer.PeekPointIn(1001, rightmost: true)!.Value, null);
+            await Wait(0.1);
+            string moved = HandViewer.DescribeHover();
+            bool waits = HandViewer.HoveredOwnerNetId == 1001 && HandViewer.CloseupId == null;
+            await Wait(0.5);
+            Check("moving onto another hand's card restarts the hover delay", lowerShown && waits && HandViewer.CloseupId != null,
+                $"lower hand closeup {lowerShown}; right after the move: {moved}; then: {HandViewer.DescribeHover()}");
+            await Mouse(away, null);
+            Settings.HoverDelay = 0.1f;
+            await Wait(0.3);
             PileViewer.SimulatePress(PileViewer.StripIndexOf(MutatorId), PileType.Hand);
             await Wait(0.2);
             Check("its eye closes just that hand", HandViewer.ViewedNetIds.SequenceEqual(new ulong[] { 1001 }), HandViewer.DescribeViewed());
@@ -1139,6 +1218,144 @@ public static class AutoTest
             $"viewing={HandViewer.ViewedNetId?.ToString() ?? "nobody"} hideOwnHand={HandViewer.HideOwnHand}");
     }
 
+    // ---------------- Harness: a teammate without the Pile Viewer (test fixtures only) ----------------
+
+    private const int HarnessSteps = 5;
+
+    /// <summary>Host (modded): looks at and aims the fixtures-only teammate's cards; they report what they saw.</summary>
+    private static async Task HarnessObserver()
+    {
+        Player me = Me;
+        Player teammate = PileViewer.Teammates().First(t => t.player.NetId == MutatorId).player;
+        _hostGold0 = me.Gold;
+        _mutatorGold0 = teammate.Gold;
+        Vector2 away = new(960f, 300f);
+        Settings.CardSignals = Settings.CardSignalMode.SendAndReceive;
+        HandViewer.View(MutatorId);
+        await Wait(0.5);
+        int shown = HandViewer.ShownCards().Count;
+        Check("you see the hand of a teammate without the Pile Viewer", shown > 0 && shown == PileType.Hand.GetPile(teammate).Cards.Count, $"{shown} cards");
+        int middle = HandViewer.MiddleIndexOf(_ => true);
+
+        // 1-2: hovering inside the delay sends nothing (they watch the whole time).
+        if (await Ask(1))
+        {
+            Settings.HoverDelay = 0.9f;
+            await Mouse(HandViewer.PeekPoint(middle)!.Value, null);
+            await Wait(0.5);
+            Check("hovered within the delay: no closeup yet", HandViewer.HoveredId != null && HandViewer.CloseupId == null, HandViewer.DescribeHover());
+            await Mouse(away, null);
+            await Wait(0.3);
+        }
+        await Ask(2);
+
+        // 3: an instant closeup: they see the card over your head.
+        Settings.HoverDelay = 0f;
+        await Mouse(HandViewer.PeekPoint(middle)!.Value, null);
+        await Wait(0.2);
+        Check("instant hover: closeup shows", HandViewer.CloseupId != null, HandViewer.DescribeHover());
+        await Ask(3);
+        await Mouse(away, null);
+        Settings.HoverDelay = 0.1f;
+        await Wait(0.3);
+
+        // 4: aim one of their single-target cards; they see it, then play it out from under your aim.
+        int target = HandViewer.IndexOf(c => c.TargetType == TargetType.AnyEnemy);
+        if (Check("they have a single-target card", target >= 0))
+        {
+            Vector2 from = HandViewer.PeekPoint(target)!.Value, to = NCombatRoom.Instance!.GetCreatureNode(FirstEnemy)!.Hitbox.GetGlobalRect().GetCenter();
+            await Mouse(from, null);
+            await Mouse(from, true);
+            for (int i = 1; i <= 6; i++) await Mouse(from.Lerp(to, i / 6f), null);
+            await Wait(0.3);
+            Check("aiming their card", HandViewer.IsAiming, HandViewer.DescribeDragCard());
+            await Ask(4);
+            await Wait(0.5);
+            Check("they play the card you're aiming: your aim ends cleanly", !HandViewer.IsDragging && !HandViewer.IsAiming && !NTargetManager.Instance.IsInSelection,
+                $"dragging={HandViewer.IsDragging} aiming={HandViewer.IsAiming} selection={NTargetManager.Instance.IsInSelection}");
+            await Mouse(to, false);
+            await Mouse(away, null);
+            await Wait(0.3);
+        }
+        await Ask(5);
+    }
+
+    /// <summary>The fixtures-only teammate (no Pile Viewer): what the game shows it over the host's head.</summary>
+    private static async Task HarnessTeammate()
+    {
+        Player me = Me;
+        _hostGold0 = Host.Gold;
+        var tracker = RunManager.Instance.HoveredModelTracker;
+        var hand = PileType.Hand.GetPile(me);
+        Check("this teammate runs only the test fixtures (no Pile Viewer)", Harness
+            && NCombatRoom.Instance!.GetChildren().All(n => !n.Name.ToString().StartsWith("Spire2PileViewer")));
+        for (int k = 1; k <= HarnessSteps; k++)
+        {
+            await WaitUntil(() => Host.Gold >= _hostGold0 + k, 60);
+            if (Host.Gold < _hostGold0 + k)
+            {
+                Check($"host asked for step {k}", false);
+                return;
+            }
+            switch (k)
+            {
+                case 1:
+                    _hostHoverSeen.Clear();
+                    _watchHostHover = true;
+                    _ = TaskHelper.RunSafely(WatchHostHover());
+                    break;
+                case 2:
+                    _watchHostHover = false;
+                    Check("nothing over the host's head while their hover delay runs", _hostHoverSeen.Count == 0,
+                        _hostHoverSeen.Count == 0 ? "nothing seen" : string.Join(",", _hostHoverSeen.Distinct()));
+                    break;
+                case 3:
+                    await WaitUntil(() => tracker.GetHoveredModel(Host.NetId) is CardModel c && c.Owner == me, 3);
+                    Check("once their closeup shows, you see your card over the host's head",
+                        tracker.GetHoveredModel(Host.NetId) is CardModel seen && seen.Owner == me, $"{tracker.GetHoveredModel(Host.NetId)?.Id.Entry ?? "nothing"}");
+                    Check("...without the gold (no Pile Viewer here)", !HandViewer.SignalGlowing(Host.NetId));
+                    break;
+                case 4:
+                {
+                    CardModel? aimed = null;
+                    await WaitUntil(() => (aimed = tracker.GetHoveredModel(Host.NetId) as CardModel) != null && aimed.Owner == me && hand.Cards.Contains(aimed), 5);
+                    if (!Check("you see the card the host is aiming, over their head", aimed != null && hand.Cards.Contains(aimed), aimed?.Id.Entry ?? "nothing")) break;
+                    RunManager.Instance.ActionQueueSynchronizer.RequestEnqueue(new PlayCardAction(aimed!, aimed!.TargetType == TargetType.AnyEnemy ? FirstEnemy : null));
+                    await WaitUntil(() => !hand.Cards.Contains(aimed), 10);
+                    await WaitUntil(() => tracker.GetHoveredModel(Host.NetId) != aimed, 5);
+                    Check("...you play it: it leaves the host's head", !hand.Cards.Contains(aimed) && tracker.GetHoveredModel(Host.NetId) != aimed);
+                    break;
+                }
+                case 5:
+                    Check("still in combat, nothing over the host's head", CombatManager.Instance.IsInProgress && tracker.GetHoveredModel(Host.NetId) == null,
+                        $"in combat {CombatManager.Instance.IsInProgress}, over their head: {tracker.GetHoveredModel(Host.NetId)?.Id.Entry ?? "nothing"}");
+                    break;
+            }
+            int gold = me.Gold;
+            Send(me, "gold 1");
+            await WaitUntil(() => me.Gold > gold, 10);
+        }
+    }
+
+    /// <summary>A modded third player: sees the fixtures-only teammate's card over the host's head, without gold.</summary>
+    private static async Task HarnessBystander()
+    {
+        _hostGold0 = Host.Gold;
+        var tracker = RunManager.Instance.HoveredModelTracker;
+        bool saw = false, glowed = false;
+        for (double t = 0; t < 90 && Host.Gold < _hostGold0 + HarnessSteps; t += 0.03)
+        {
+            if (tracker.GetHoveredModel(Host.NetId) is CardModel c && c.Owner?.NetId == MutatorId)
+            {
+                saw = true;
+                glowed |= HandViewer.SignalGlowing(Host.NetId);
+            }
+            await Wait(0.03);
+        }
+        Check("a third player sees the teammate's card over the host's head", saw);
+        Check("...without the gold: it isn't theirs", saw && !glowed);
+    }
+
     private static async Task PressKey(Key key, bool shift = false, bool ctrl = false)
     {
         // Inject through Godot's input pipeline (same route as a physical key press), so this also checks
@@ -1146,9 +1363,9 @@ public static class AutoTest
         var down = new InputEventKey { Keycode = key, PhysicalKeycode = key, ShiftPressed = shift, CtrlPressed = ctrl, Pressed = true };
         var up = new InputEventKey { Keycode = key, PhysicalKeycode = key, ShiftPressed = shift, CtrlPressed = ctrl, Pressed = false };
         Input.ParseInputEvent(down);
-        await Wait(0.05);
+        await Wait(0.03);
         Input.ParseInputEvent(up);
-        await Wait(0.15);
+        await Wait(0.1);
     }
 
     /// <summary>Real mouse event at a viewport position (converted to window pixels): press/release, or motion if null.</summary>
@@ -1161,7 +1378,7 @@ public static class AutoTest
                 ButtonMask = p ? MouseButtonMask.Left : 0 }
             : new InputEventMouseMotion { Position = point, GlobalPosition = point, ButtonMask = MouseButtonMask.Left };
         Input.ParseInputEvent(ev);
-        await Wait(0.05);
+        await Wait(0.035); // ~2 frames: the game handles it on the next frame
     }
 
     private static async Task WaitUntil(Func<bool> condition, double timeoutSeconds)

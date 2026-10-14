@@ -10,7 +10,10 @@ param(
     # Send each instance's console output to %TEMP%\sts2_<n>.out instead of this terminal (automated runs).
     [switch]$QuietConsole,
     # Window size (always windowed), e.g. 3840x1600 to test at the monitor's resolution.
-    [string]$WindowSize = '1280x720'
+    [string]$WindowSize = '1280x720',
+    # Debug builds: the first client runs only the test fixtures (-pileviewerharness), like a teammate without
+    # the Pile Viewer that the auto-test can still drive.
+    [switch]$HarnessClient
 )
 function Start-Game($gameArgs, $n) {
     if ($QuietConsole) {
@@ -30,9 +33,10 @@ if (-not $?) { exit 1 }
 $hostArgs = @('-fastmp', 'host_standard') + $ExtraArgs
 if ($VanillaSide -eq 'host') { $hostArgs += '-nomods' }
 Start-Game $hostArgs 'host'
-Start-Sleep -Seconds 3
+Start-Sleep -Milliseconds 500 # clients take ~2 s to boot before joining, by when the host listens
 for ($i = 0; $i -lt $Players - 1; $i++) {
     $clientArgs = @('-fastmp', 'join', '-clientId', (1000 + $i)) + $ExtraArgs
     if ($VanillaSide -eq 'client' -and $i -eq 0) { $clientArgs += '-nomods' }
+    if ($HarnessClient -and $i -eq 0) { $clientArgs += '-pileviewerharness' }
     Start-Game $clientArgs (1000 + $i)
 }

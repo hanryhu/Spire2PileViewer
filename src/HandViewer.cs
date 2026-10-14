@@ -343,8 +343,7 @@ public static partial class HandViewer
         get
         {
             NHandCardHolder? card = _drag ?? _focused;
-            if (card == null || !GodotObject.IsInstanceValid(card)) return null;
-            return _hands.FirstOrDefault(h => h.Cards.Any(c => c.Holder == card))?.NetId;
+            return card != null && GodotObject.IsInstanceValid(card) ? OwnerOf(card) : null;
         }
     }
 
@@ -371,6 +370,12 @@ public static partial class HandViewer
     private static bool _hoverActive;
 
     private static double _lastUnfocus;
+
+    /// <summary>Owner of the hand the current hover session is in.</summary>
+    private static ulong? _sessionOwner;
+
+    private static ulong? OwnerOf(NHandCardHolder? holder) =>
+        holder == null ? null : _hands.FirstOrDefault(h => h.Cards.Any(c => c.Holder == holder))?.NetId;
 
     private const double HoverSessionGrace = 0.25;
 
@@ -626,6 +631,11 @@ public static partial class HandViewer
             return null;
         }
         if (_inputBlocked) return null;
+        // The no-delay hover between neighbours stays within one teammate's hand: moving onto a card of another
+        // shown hand starts the delay again (its focus time is when the mouse got there).
+        ulong? owner = OwnerOf(_focused);
+        if (_hoverActive && owner != _sessionOwner) _hoverActive = false;
+        _sessionOwner = owner;
         bool disabled = Settings.HoverDelay >= Settings.MaxHoverDelay;
         if (_clicked == _focused || _drag == _focused)
         {

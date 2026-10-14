@@ -72,7 +72,8 @@ public static partial class PileViewer
 
     /// <summary>
     /// A relic, potion or card a player gains or loses flies in or out beside their name (NMultiplayerPlayerState
-    /// adds it to the row for the animation); keep it above the Pile Viewer instead of hidden behind it.
+    /// adds it to the row for the animation); keep it above the Pile Viewer instead of hidden behind it. Clicks go
+    /// to whatever is drawn on top, so while it plays it takes the mouse over that spot (what you see is what you click).
     /// </summary>
     private static void RaiseRowAnimations(Control row)
     {

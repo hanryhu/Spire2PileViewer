@@ -31,7 +31,7 @@ Tags are `hvN` (Pile Viewer uses `mN`). Each milestone ends in an annotated tag 
 
 - `scripts/test-settings.ps1 -Mode apply|restore` — windowed 1280×720 + `steam_appid.txt` (game closed).
   Every launch script applies it automatically; run `restore` when testing is over (puts back fullscreen etc.).
-- Automated tests: see PILE_VIEWER.md "Dev loop" (`dev-autotest-mp.ps1`, suites `fast` / `full` / `mixed`).
+- Automated tests: see PILE_VIEWER.md "Dev loop" (`dev-autotest-mp.ps1`, suites `fast` / `full` / `harness` / `mixed`).
 - Real input is injected with `Input.ParseInputEvent`; screenshots of each window via scratchpad `shot.ps1`
   (only works while the user isn't using the PC).
 - Always verify in multiplayer; 3 players when player count matters.
