@@ -385,7 +385,7 @@ public static class AutoTest
         await WaitUntil(() => CombatManager.Instance.IsInProgress && NPlayerHand.Instance != null, 60);
         if (!Check("combat started", CombatManager.Instance.IsInProgress && NPlayerHand.Instance != null))
         {
-            Log($"RESULT suite={Suite} pass={_pass} fail={_fail} time={clock.Elapsed.TotalSeconds:0.0}s");
+            Log($"RESULT suite={Suite} pass={_pass} fail={_fail} time={clock.Elapsed.TotalSeconds:0.0}s window={DisplayServer.WindowGetSize().X}x{DisplayServer.WindowGetSize().Y}");
             Log("done");
             return;
         }
@@ -403,7 +403,7 @@ public static class AutoTest
         {
             Check("no exception", false, ex.ToString().Replace('\n', ' '));
         }
-        Log($"RESULT suite={Suite} pass={_pass} fail={_fail} time={clock.Elapsed.TotalSeconds:0.0}s");
+        Log($"RESULT suite={Suite} pass={_pass} fail={_fail} time={clock.Elapsed.TotalSeconds:0.0}s window={DisplayServer.WindowGetSize().X}x{DisplayServer.WindowGetSize().Y}");
         Log("done");
     }
 

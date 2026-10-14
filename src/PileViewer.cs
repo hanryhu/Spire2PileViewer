@@ -277,7 +277,7 @@ public static partial class PileViewer
     /// <summary>
     /// Default left edge for Fixed Pile Viewers (screen x): halfway through the 4th relic slot of your relic bar,
     /// measured from its first slot and spacing (so it doesn't depend on how many relics you have), but not left of a
-    /// starting character's name block plus padding.
+    /// name block with a 90-max-HP health bar plus padding.
     /// </summary>
     internal static float FixedOriginCap()
     {
@@ -289,19 +289,22 @@ public static partial class PileViewer
             float step = first.Size.X + relics.GetThemeConstant("h_separation") * relics.GetGlobalTransformWithCanvas().Scale.X;
             cap = first.Position.X + 3.5f * step;
         }
-        // Never left of where a starting character's name block ends (health bar at 80 max HP, the most any
-        // character starts with, + the game's 6-unit margin) plus padding — otherwise starting rows wouldn't line up.
+        // Never left of where a name block with a 90-max-HP health bar ends (+ the game's 6-unit margin) plus padding:
+        // most games stay under 90 max HP (characters start at 66-80), so their Pile Viewers never shift.
         if (PlayerRowAny() is { } row && row.GetNodeOrNull<NHealthBar>("%HealthBar")?.HpBarContainer is Control bar)
         {
             Rect2 barRect = ScreenRect(bar);
             float scale = row.GetGlobalTransformWithCanvas().Scale.X;
-            cap = Mathf.Max(cap, barRect.Position.X + (StartingBarWidth + 6f + RowGap) * scale);
+            cap = Mathf.Max(cap, barRect.Position.X + (CapBarWidth + 6f + RowGap) * scale);
         }
         return cap;
     }
 
-    // Width the game gives a health bar at 80 max HP (UpdateWidthRelativeToReferenceValue(80, 175)).
-    private const float StartingBarWidth = 175f;
+    // The game sizes health bars as maxHp / 80 * 175 (UpdateWidthRelativeToReferenceValue(80, 175)); the cap leaves
+    // room for one at 90 max HP.
+    private const float CapMaxHp = 90f;
+
+    private const float CapBarWidth = CapMaxHp / 80f * 175f;
 
     private static NMultiplayerPlayerState? PlayerRowAny() =>
         NRun.Instance?.GlobalUi?.MultiplayerPlayerContainer?.GetChildren().OfType<NMultiplayerPlayerState>().FirstOrDefault();
