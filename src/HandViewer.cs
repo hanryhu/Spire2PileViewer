@@ -13,6 +13,8 @@ using MegaCrit.Sts2.Core.Nodes.Cards;
 using MegaCrit.Sts2.Core.Nodes.Cards.Holders;
 using MegaCrit.Sts2.Core.Nodes;
 using MegaCrit.Sts2.Core.Nodes.Combat;
+using MegaCrit.Sts2.Core.Nodes.Multiplayer;
+using HarmonyLib;
 using MegaCrit.Sts2.Core.Nodes.HoverTips;
 using MegaCrit.Sts2.Core.Nodes.Rooms;
 using MegaCrit.Sts2.Core.Nodes.Screens.Capstones;
@@ -21,14 +23,24 @@ using MegaCrit.Sts2.Core.Runs;
 namespace Spire2PileViewer;
 
 /// <summary>
-/// Hand Viewer (see HAND_VIEWER.md): shows one teammate's hand behind your own. This class owns the view
-/// state (whose hand is shown, whether your own hand is hidden) and the "Hide hand" button under End Turn.
-/// Driven from PileViewer's per-frame update.
+/// Hand Viewer (see HAND_VIEWER.md): shows teammates' hands behind your own (up to Max Hand Viewers, stacked).
+/// This class owns the view state (whose hands are shown, whether your own hand is hidden) and the "Hide hand"
+/// button under End Turn. Driven from PileViewer's per-frame update.
 /// </summary>
 public static partial class HandViewer
 {
-    /// <summary>NetId of the teammate whose hand is shown, or null.</summary>
-    public static ulong? ViewedNetId { get; private set; }
+    /// <summary>
+    /// Teammates whose hands are shown, least recently clicked first: that one sits lowest (just above your hand),
+    /// the most recently clicked on top. Never more than Settings.MaxHandViewers; showing another closes the oldest.
+    /// </summary>
+    private static readonly List<ulong> _viewed = new();
+
+    public static IReadOnlyList<ulong> ViewedNetIds => _viewed;
+
+    public static bool IsViewing(ulong netId) => _viewed.Contains(netId);
+
+    /// <summary>The most recently shown teammate's hand (the top one), or null.</summary>
+    public static ulong? ViewedNetId => _viewed.Count > 0 ? _viewed[^1] : null;
 
     /// <summary>
     /// The player picked a hand (or closed it) this run. Until then the lowest-numbered teammate's hand is shown.
@@ -44,8 +56,9 @@ public static partial class HandViewer
     private static StyleBoxFlat? _hideButtonStyle;
 
     /// <summary>
-    /// Strip "Hand" slot: show this teammate's hand, or hide it if it's already shown (one at a time). On your own
-    /// strip it hides/shows your own hand instead, like the Hide hand button.
+    /// Strip "Hand" slot: show this teammate's hand on top of the stack, or hide it if it's already shown. Past
+    /// Max Hand Viewers the least recently clicked hand closes. On your own strip it hides/shows your own hand
+    /// instead, like the Hide hand button.
     /// </summary>
     public static void Toggle(Player player)
     {
@@ -55,10 +68,18 @@ public static partial class HandViewer
             ToggleHideOwnHand();
             return;
         }
-        ViewedNetId = ViewedNetId == player.NetId ? null : player.NetId;
+        if (!_viewed.Remove(player.NetId)) _viewed.Add(player.NetId);
+        TrimToMax();
         _viewChosen = true;
-        ModLog.Info($"HandViewer: viewing {(ViewedNetId?.ToString() ?? "nobody")}");
+        ModLog.Info($"HandViewer: viewing {DescribeViewed()}");
     }
+
+    private static void TrimToMax()
+    {
+        while (_viewed.Count > Settings.MaxHandViewers) _viewed.RemoveAt(0);
+    }
+
+    internal static string DescribeViewed() => _viewed.Count == 0 ? "nobody" : string.Join(",", _viewed);
 
     private static ulong LocalNetId => RunManager.Instance?.NetService?.NetId ?? 0;
 
@@ -99,33 +120,39 @@ public static partial class HandViewer
         _hideButton = null;
         _lastText = "";
         ClearCards();
-        if (_cardLayer != null && GodotObject.IsInstanceValid(_cardLayer)) _cardLayer.QueueFree();
-        _cardLayer = null;
     }
 
-    /// <summary>Back at the main menu: forget whose hand was shown, so the next run starts with the default again.</summary>
+    /// <summary>Back at the main menu: forget whose hands were shown, so the next run starts with the default again.</summary>
     public static void ResetRun()
     {
         Reset();
-        ViewedNetId = null;
+        _viewed.Clear();
         _viewChosen = false;
     }
 
     /// <summary>Per-frame update while in combat (called by PileViewer).</summary>
     internal static void Update(NCombatRoom room, Func<ulong, Player?> findPlayer)
     {
+        if (!Settings.ReceivesCardSignals && _signals.Count > 0) StopSignals(); // turned off while one was blinking
         if (!Settings.HandViewerEnabled)
         {
-            if (_cardLayer != null || HideOwnHand || _hideButton != null) Reset();
+            if (_hands.Count > 0 || HideOwnHand || _hideButton != null) Reset();
             return;
         }
-        if (!_viewChosen && ViewedNetId == null && PileViewer.Teammates().FirstOrDefault().player is Player first)
+        if (!_viewChosen)
         {
-            ViewedNetId = first.NetId; // default: the lowest-numbered teammate
-            ModLog.Info($"HandViewer: viewing {first.NetId} (default)");
+            // Default: the lowest-numbered teammates, as many as Max Hand Viewers allows (lowest number at the bottom).
+            var defaults = PileViewer.Teammates().Take(Settings.MaxHandViewers).Select(t => t.player.NetId).ToList();
+            if (!defaults.SequenceEqual(_viewed))
+            {
+                _viewed.Clear();
+                _viewed.AddRange(defaults);
+                ModLog.Info($"HandViewer: viewing {DescribeViewed()} (default)");
+            }
         }
-        Player? viewed = ViewedNetId is ulong id ? findPlayer(id) : null;
-        if (ViewedNetId != null && viewed == null) ViewedNetId = null; // teammate left / not in this combat
+        TrimToMax();
+        _viewed.RemoveAll(id => findPlayer(id) == null); // teammate left / not in this combat
+        List<Player> viewed = _viewed.Select(id => findPlayer(id)!).ToList();
         UpdateHideButton(room);
         UpdateText(viewed);
         ApplyHiddenLook(HideOwnHand);
@@ -261,9 +288,9 @@ public static partial class HandViewer
     }
 
     /// <summary>The hv3 text readout, now only logged (the cards themselves are drawn since hv4).</summary>
-    private static void UpdateText(Player? viewed)
+    private static void UpdateText(List<Player> viewed)
     {
-        string text = viewed == null ? "" : DescribeHand(viewed);
+        string text = string.Join(" | ", viewed.Select(DescribeHand));
         if (text == _lastText) return;
         _lastText = text;
         if (text != "") ModLog.Info("HandViewer: hand text: " + text);
@@ -276,12 +303,53 @@ public static partial class HandViewer
     // Holder hitbox height in the hand scene (probe hv1): a card is 422 units tall before the hand's scale.
     private const float CardHeight = 422f;
 
-    /// <summary>Sibling of NPlayerHand.CardHolderContainer, placed just before it so it draws behind your hand.</summary>
-    private static Control? _cardLayer;
+    /// <summary>
+    /// One shown teammate hand: its layer (a sibling of NPlayerHand.CardHolderContainer, placed before it so it
+    /// draws behind your hand) and the card holders on it.
+    /// </summary>
+    private sealed class ShownHand
+    {
+        public required ulong NetId;
 
-    private static readonly List<(CardModel Model, NHandCardHolder Holder)> _shown = new();
+        public required Control Layer;
 
-    private static ulong? _shownFor;
+        public readonly List<(CardModel Model, NHandCardHolder Holder)> Cards = new();
+    }
+
+    /// <summary>Shown hands, bottom (least recently clicked, drawn in front) first.</summary>
+    private static readonly List<ShownHand> _hands = new();
+
+    /// <summary>Teammate card we told the game we're hovering (shown to others over your head), or null.</summary>
+    private static CardModel? _syncedHover;
+
+    /// <summary>
+    /// Like hovering your own card: once a teammate card's closeup shows (not during the hover delay), the game shows
+    /// it to the others over your head.
+    /// </summary>
+    private static void SyncHover(CardModel? model)
+    {
+        if (!Settings.SendsCardSignals) model = null;
+        if (model == _syncedHover) return;
+        var tracker = RunManager.Instance?.HoveredModelTracker;
+        if (tracker == null) return;
+        if (model != null) tracker.OnLocalCardHovered(model);
+        else tracker.OnLocalCardUnhovered();
+        _syncedHover = model;
+    }
+
+    /// <summary>Owner of the teammate card under the mouse or being dragged, or null.</summary>
+    internal static ulong? HoveredOwnerNetId
+    {
+        get
+        {
+            NHandCardHolder? card = _drag ?? _focused;
+            if (card == null || !GodotObject.IsInstanceValid(card)) return null;
+            return _hands.FirstOrDefault(h => h.Cards.Any(c => c.Holder == card))?.NetId;
+        }
+    }
+
+    private static IEnumerable<NHandCardHolder> AllHolders =>
+        _hands.SelectMany(h => h.Cards).Select(c => c.Holder).Where(h => GodotObject.IsInstanceValid(h));
 
     /// <summary>Teammate card under the mouse (native closeup), or null.</summary>
     private static NHandCardHolder? _focused;
@@ -335,59 +403,123 @@ public static partial class HandViewer
     /// <summary>How far (container units) the teammate's cards sit above yours: "% of card visible" of a card.</summary>
     private static float RaiseFor(int handSize) => Settings.HandVisible * CardHeight * HandPosHelper.GetScale(Math.Max(handSize, 1)).Y;
 
-    private static void UpdateCards(Player? viewed)
+    private static void UpdateCards(List<Player> viewed)
     {
+        for (int i = _hands.Count - 1; i >= 0; i--)
+        {
+            if (!viewed.Any(p => p.NetId == _hands[i].NetId) || !GodotObject.IsInstanceValid(_hands[i].Layer)) RemoveHand(i);
+        }
         NPlayerHand? hand = NPlayerHand.Instance;
-        bool show = viewed != null && hand != null && NCapstoneContainer.Instance?.InUse != true;
+        bool show = viewed.Count > 0 && hand != null && NCapstoneContainer.Instance?.InUse != true;
         if (!show)
         {
-            if (_cardLayer != null && GodotObject.IsInstanceValid(_cardLayer)) _cardLayer.Visible = false;
-            if (viewed == null) ClearCards();
+            foreach (ShownHand h in _hands) h.Layer.Visible = false;
+            SyncHover(null);
             return;
         }
 
+        // One layer per hand, in click order: the least recently clicked lowest, the most recent on top.
         Control container = hand!.CardHolderContainer;
-        if (_cardLayer == null || !GodotObject.IsInstanceValid(_cardLayer))
-        {
-            _shown.Clear();
-            _cardLayer = new Control { Name = "Spire2PileViewer_TeammateHand", MouseFilter = Control.MouseFilterEnum.Ignore };
-            Node parent = container.GetParent();
-            parent.AddChild(_cardLayer);
-            parent.MoveChild(_cardLayer, container.GetIndex()); // just before → drawn behind your cards
-            ModLog.Info($"HandViewer: card layer added under {parent.Name} at index {_cardLayer.GetIndex()}");
-        }
-        _cardLayer.Visible = true;
-        _cardLayer.Position = container.Position;
-        _cardLayer.Size = container.Size;
-        _cardLayer.Scale = container.Scale;
+        var ordered = viewed.Select(p => _hands.FirstOrDefault(h => h.NetId == p.NetId) ?? CreateHand(p.NetId, container)).ToList();
+        _hands.Clear();
+        _hands.AddRange(ordered);
+        OrderLayers(container);
+
+        double now = Time.GetTicksMsec() / 1000.0;
+        BlockWhileYouPlay(hand);
+        UpdateDrag();
+        if (_focused != null && !GodotObject.IsInstanceValid(_focused)) _focused = null;
+        NHandCardHolder? closeup = CloseupHolder(now);
+        _lastCloseup = closeup;
+        HoldBackHoverEffects(closeup);
+        SyncHover(closeup != null && closeup != _drag ? closeup.CardNode?.Model : null);
         // 0 → untinted, 1 → dark like a heavy shadow; a separate (lighter by default) amount while your hand is hidden.
         float shade = 1f - 0.6f * (HideOwnHand ? Settings.HandShadowWhenHidden : Settings.HandShadow);
-        _cardLayer.Modulate = new Color(shade, shade, shade);
+        // The game only refreshes card nodes it can find (NCard.FindOnTable) and holders inside its own hand
+        // container, which excludes ours — refresh costs/numbers and the playable glow a few times a second.
+        bool refresh = now >= _nextVisualRefresh;
+        if (refresh) _nextVisualRefresh = now + 0.25;
+        for (int k = 0; k < _hands.Count; k++) UpdateHand(_hands[k], viewed[k], k + 1, hand, container, shade, closeup, refresh);
+    }
 
-        if (_shownFor != viewed!.NetId) ClearCards();
-        _shownFor = viewed.NetId;
+    private static ShownHand CreateHand(ulong netId, Control container)
+    {
+        var layer = new Control { Name = $"Spire2PileViewer_TeammateHand_{netId}", MouseFilter = Control.MouseFilterEnum.Ignore };
+        Node parent = container.GetParent();
+        parent.AddChild(layer);
+        parent.MoveChild(layer, container.GetIndex()); // just before → drawn behind your cards
+        ModLog.Info($"HandViewer: card layer for {netId} added under {parent.Name} at index {layer.GetIndex()}");
+        return new ShownHand { NetId = netId, Layer = layer };
+    }
+
+    /// <summary>Layers right before your hand's container: the top hand first (drawn furthest back), the bottom last.</summary>
+    private static void OrderLayers(Control container)
+    {
+        bool inOrder = true;
+        for (int k = 0; k < _hands.Count; k++)
+        {
+            if (_hands[k].Layer.GetIndex() != container.GetIndex() - 1 - k) inOrder = false;
+        }
+        if (inOrder) return;
+        Node parent = container.GetParent();
+        for (int k = _hands.Count - 1; k >= 0; k--)
+        {
+            parent.MoveChild(_hands[k].Layer, parent.GetChildCount() - 1);
+            parent.MoveChild(_hands[k].Layer, container.GetIndex());
+        }
+    }
+
+    private static void RemoveHand(int index)
+    {
+        ShownHand shown = _hands[index];
+        _hands.RemoveAt(index);
+        bool Mine(NHandCardHolder? h) => h != null && shown.Cards.Any(c => c.Holder == h);
+        if (Mine(_drag)) EndDrag(attempted: false);
+        if (Mine(_focused)) _focused = null;
+        if (Mine(_clicked)) _clicked = null;
+        if (Mine(_pressed)) _pressed = null;
+        foreach (var (_, holder) in shown.Cards) _glow.Remove(holder);
+        if (GodotObject.IsInstanceValid(shown.Layer)) shown.Layer.QueueFree(); // frees its holders too
+    }
+
+    /// <summary>
+    /// One teammate's hand: the native fan layout for their hand size, raised so "% of card visible" peeks out above
+    /// the hand below it (level 1 above yours, level 2 above that, ...).
+    /// </summary>
+    private static void UpdateHand(ShownHand shown, Player viewed, int level, NPlayerHand hand, Control container, float shade,
+        NHandCardHolder? closeup, bool refresh)
+    {
+        Control layer = shown.Layer;
+        List<(CardModel Model, NHandCardHolder Holder)> held = shown.Cards;
+        layer.Visible = true;
+        layer.Position = container.Position;
+        layer.Size = container.Size;
+        layer.Scale = container.Scale;
+        layer.Modulate = new Color(shade, shade, shade);
 
         IReadOnlyList<CardModel> cards = PileType.Hand.GetPile(viewed).Cards;
+        float raise = level * RaiseFor(cards.Count);
         // Drop cards that left the hand, add new ones.
-        for (int i = _shown.Count - 1; i >= 0; i--)
+        for (int i = held.Count - 1; i >= 0; i--)
         {
-            if (!cards.Contains(_shown[i].Model))
+            if (!cards.Contains(held[i].Model))
             {
-                if (GodotObject.IsInstanceValid(_shown[i].Holder)) _shown[i].Holder.QueueFree();
-                _glow.Remove(_shown[i].Holder);
-                _shown.RemoveAt(i);
+                if (held[i].Holder == _drag) EndDrag(attempted: false);
+                if (GodotObject.IsInstanceValid(held[i].Holder)) held[i].Holder.QueueFree();
+                _glow.Remove(held[i].Holder);
+                held.RemoveAt(i);
             }
         }
         foreach (CardModel card in cards)
         {
-            if (_shown.Any(s => s.Model == card)) continue;
+            if (held.Any(s => s.Model == card)) continue;
             NCard? node = NCard.Create(card);
             if (node == null) continue;
             NHandCardHolder holder = NHandCardHolder.Create(node, hand);
-            _cardLayer.AddChild(holder);
+            layer.AddChild(holder);
             holder.SetIndexLabel(0); // no Hand Card Count numbers on the teammate's cards
             int index = cards.ToList().IndexOf(card);
-            holder.Position = HandPosHelper.GetPosition(cards.Count, index) - new Vector2(0f, RaiseFor(cards.Count));
+            holder.Position = HandPosHelper.GetPosition(cards.Count, index) - new Vector2(0f, raise);
             holder.SetScaleInstantly(HandPosHelper.GetScale(cards.Count));
             holder.SetAngleInstantly(HandPosHelper.GetAngle(cards.Count, index));
             if (_inputBlocked) holder.Hitbox.MouseFilter = Control.MouseFilterEnum.Ignore;
@@ -407,28 +539,19 @@ public static partial class HandViewer
                 if (_clicked == h) _clicked = null;
             };
             holder.HolderMouseClicked += h => OnTeammateCardPressed((NHandCardHolder)h);
-            _shown.Add((card, holder));
+            held.Add((card, holder));
         }
 
-        // Native fan layout for the teammate's hand size, raised so only "% of card visible" peeks out above yours.
         // A hovered card gets the native closeup (NPlayerHand.RefreshLayout): upright, full size, lifted so the
-        // whole card shows, drawn above your hand (the holder sets ZIndex 1 on hover), neighbours slide aside.
-        float raise = RaiseFor(cards.Count);
-        double now = Time.GetTicksMsec() / 1000.0;
-        BlockWhileYouPlay(hand);
-        UpdateDrag();
-        if (_focused != null && !GodotObject.IsInstanceValid(_focused)) _focused = null;
-        NHandCardHolder? closeup = CloseupHolder(now);
-        _lastCloseup = closeup;
-        HoldBackHoverEffects(closeup);
-        int focusIndex = closeup == null || closeup == _drag ? -1 : _shown.FindIndex(s => s.Holder == closeup) is int f && f >= 0
-            ? cards.ToList().IndexOf(_shown[f].Model) : -1;
+        // whole card shows, drawn above every hand (the holder sets ZIndex 1 on hover), neighbours slide aside.
+        int focusIndex = closeup == null || closeup == _drag ? -1 : held.FindIndex(s => s.Holder == closeup) is int f && f >= 0
+            ? cards.ToList().IndexOf(held[f].Model) : -1;
         for (int i = 0; i < cards.Count; i++)
         {
-            var entry = _shown.FirstOrDefault(s => s.Model == cards[i]);
+            var entry = held.FirstOrDefault(s => s.Model == cards[i]);
             if (entry.Holder == null || !GodotObject.IsInstanceValid(entry.Holder)) continue;
             NHandCardHolder holder = entry.Holder;
-            _cardLayer.MoveChild(holder, i);
+            layer.MoveChild(holder, i);
             if (holder == _drag) continue; // the drag places it
             Vector2 position = HandPosHelper.GetPosition(cards.Count, i) - new Vector2(0f, raise);
             if (focusIndex > -1 && i != focusIndex)
@@ -449,12 +572,12 @@ public static partial class HandViewer
                 else
                 {
                     float handTop = HandPosHelper.GetPosition(cards.Count, i).Y - height * 0.5f * HandPosHelper.GetScale(cards.Count).Y;
-                    if (NPlayerHand.Instance is NPlayerHand own && own.ActiveHolders.Count > 0)
+                    if (hand.ActiveHolders.Count > 0)
                     {
-                        handTop = Mathf.Min(handTop, own.ActiveHolders.Min(h => h.Position.Y - h.Hitbox.Size.Y * 0.5f * h.Scale.Y));
+                        handTop = Mathf.Min(handTop, hand.ActiveHolders.Min(h => h.Position.Y - h.Hitbox.Size.Y * 0.5f * h.Scale.Y));
                     }
                     handTop -= 20f; // clear the cost badges, which stick out above your cards
-                    _focusBottom ??= Mathf.Max(handTop, (_cardLayer.GetGlobalTransformWithCanvas().AffineInverse() * LastMouse).Y + 4f);
+                    _focusBottom ??= Mathf.Max(handTop, (layer.GetGlobalTransformWithCanvas().AffineInverse() * LastMouse).Y + 4f);
                     position.Y = _focusBottom.Value - height * 0.5f;
                 }
                 holder.SetAngleInstantly(0f);
@@ -471,24 +594,14 @@ public static partial class HandViewer
         }
         // The closeup (and a dragged card) use the lighter "when hand hidden" shadow; the rest keep the layer's.
         float lifted = (1f - 0.6f * Settings.HandShadowWhenHidden) / shade;
-        foreach (var (_, holder) in _shown)
+        foreach (var (model, holder) in held)
         {
             if (!GodotObject.IsInstanceValid(holder)) continue;
             Color target = holder == closeup || holder == _drag ? new Color(lifted, lifted, lifted) : Colors.White;
             if (holder.Modulate != target) holder.Modulate = target;
-        }
-
-        // The game only refreshes card nodes it can find (NCard.FindOnTable) and holders inside its own hand
-        // container, which excludes ours — refresh costs/numbers and the playable glow a few times a second.
-        if (now >= _nextVisualRefresh)
-        {
-            _nextVisualRefresh = now + 0.25;
-            foreach (var (model, holder) in _shown)
-            {
-                if (!GodotObject.IsInstanceValid(holder) || holder.CardNode is not NCard node) continue;
-                if (holder != _drag) node.UpdateVisuals(PileType.Hand, CardPreviewMode.Normal); // keep the drag's preview
-                ApplyGlow(holder, node, TeammateGlow(model, viewed));
-            }
+            if (!refresh || holder.CardNode is not NCard node) continue;
+            if (holder != _drag) node.UpdateVisuals(PileType.Hand, CardPreviewMode.Normal); // keep the drag's preview
+            ApplyGlow(holder, node, TeammateGlow(model, viewed));
         }
     }
 
@@ -554,9 +667,9 @@ public static partial class HandViewer
         bool block = _drag == null && (hand.InCardPlay || TargetManager?.IsInSelection == true);
         if (block == _inputBlocked) return;
         _inputBlocked = block;
-        foreach (var (_, holder) in _shown)
+        foreach (NHandCardHolder holder in AllHolders)
         {
-            if (GodotObject.IsInstanceValid(holder)) holder.Hitbox.MouseFilter = block ? Control.MouseFilterEnum.Ignore : Control.MouseFilterEnum.Stop;
+            holder.Hitbox.MouseFilter = block ? Control.MouseFilterEnum.Ignore : Control.MouseFilterEnum.Stop;
         }
         if (block && _focused != null)
         {
@@ -569,7 +682,8 @@ public static partial class HandViewer
         ModLog.Info($"HandViewer: teammate cards {(block ? "ignore the mouse while you play a card" : "respond to the mouse again")}");
     }
 
-    private static Vector2 ToLayer(Vector2 viewportPos) => _cardLayer!.GetGlobalTransformWithCanvas().AffineInverse() * viewportPos;
+    /// <summary>Viewport point in the dragged card's layer (every hand's layer shares your hand container's transform).</summary>
+    private static Vector2 ToLayer(Vector2 viewportPos) => ((Control)_drag!.GetParent()).GetGlobalTransformWithCanvas().AffineInverse() * viewportPos;
 
     private static float _dragStartY;
 
@@ -638,6 +752,9 @@ public static partial class HandViewer
         NHoverTipSet.Remove(holder);
         holder.BeginDrag();
         holder.Hitbox.MouseFilter = Control.MouseFilterEnum.Ignore; // like the game: don't block what's under the card
+        // Like dragging your own card: the game shows teammates the card over your head (its own sync message, so
+        // players without the mod see it too).
+        if (Settings.SendsCardSignals && holder.CardNode?.Model is CardModel model) RunManager.Instance?.HoveredModelTracker?.OnLocalCardSelected(model);
         ModLog.Info($"HandViewer: preview drag {holder.CardNode?.Model?.Id.Entry}");
     }
 
@@ -650,8 +767,15 @@ public static partial class HandViewer
         _drag.SetTargetScale(Vector2.One * 0.75f);
         manager.CreatureHovered += OnCreatureHovered;
         manager.CreatureUnhovered += OnCreatureUnhovered;
-        manager.StartTargeting(card.TargetType, node, TargetMode.ReleaseMouseToTarget,
-            () => _drag == null || LastMouse.Y > size.Y * 0.95f, null);
+        // The game judges "any ally" from your side (anyone but you); for a teammate's card it's anyone but them —
+        // so you're a valid target, the card's owner isn't.
+        Player owner = card.Owner;
+        bool ally = card.TargetType == TargetType.AnyAlly;
+        Func<Node, bool>? notOwner = ally
+            ? n => n is NCreature c ? c.Entity?.Player != owner : n is not NMultiplayerPlayerState s || s.Player != owner
+            : null;
+        manager.StartTargeting(ally ? TargetType.AnyPlayer : card.TargetType, node, TargetMode.ReleaseMouseToTarget,
+            () => _drag == null || LastMouse.Y > size.Y * 0.95f, notOwner);
         ModLog.Info($"HandViewer: preview aiming {card.Id.Entry}");
         TaskHelper.RunSafely(AwaitTarget(manager));
     }
@@ -709,6 +833,7 @@ public static partial class HandViewer
         if (_multiShown && holder.CardNode?.Model is CardModel card) ShowMultiTargeting(card, false);
         _multiShown = false;
         _drag = null;
+        RunManager.Instance?.HoveredModelTracker?.OnLocalCardDeselected();
         _clicked = null;
         if (GodotObject.IsInstanceValid(holder))
         {
@@ -761,17 +886,62 @@ public static partial class HandViewer
 
     private static void ClearCards()
     {
+        SyncHover(null);
         EndDrag(attempted: false);
         _pressed = null;
         _clicked = null;
-        foreach (var (_, holder) in _shown)
-        {
-            if (GodotObject.IsInstanceValid(holder)) holder.QueueFree();
-        }
-        _shown.Clear();
-        _glow.Clear();
-        _shownFor = null;
         _focused = null;
+        for (int i = _hands.Count - 1; i >= 0; i--) RemoveHand(i);
+        _glow.Clear();
+    }
+
+    // ---- hv11: a teammate trying out one of your cards ----
+
+    /// <summary>Card over a teammate's head (the game's multiplayer intent) that is glowing because it's yours, by teammate.</summary>
+    private static readonly Dictionary<ulong, (NCard Card, Tween Pulse)> _signals = new();
+
+    private const float SignalGlowWidth = 0.1f;
+
+    /// <summary>
+    /// The game shows the card a teammate hovers or drags over their head. When it's one of *your* cards (they're
+    /// trying it out from their Hand Viewer — a hint to play it), it pulses with a gold glow. Called after the game
+    /// updates that intent.
+    /// </summary>
+    internal static void OnTeammateIntentChanged(NMultiplayerPlayerIntentHandler handler)
+    {
+        var t = Traverse.Create(handler);
+        if (t.Field("_player").GetValue() is not Player teammate) return;
+        bool mine = Settings.ReceivesCardSignals && t.Field("_displayedModel").GetValue() is CardModel card && card.Owner?.NetId == LocalNetId
+            && teammate.NetId != LocalNetId;
+        NCard? shownNode = handler.CardIntent.GetNodeOrNull<NCard>("%Card");
+        if (mine && _signals.TryGetValue(teammate.NetId, out var current) && current.Card == shownNode && current.Pulse.IsValid()) return;
+        if (_signals.Remove(teammate.NetId, out var old))
+        {
+            old.Pulse.Kill();
+            if (GodotObject.IsInstanceValid(old.Card)) old.Card.CardHighlight.AnimHide();
+        }
+        if (!mine || shownNode is not NCard shown) return;
+        // Blink about once a second: the glow's width (what NCardHighlight.AnimShow animates to 0.075) from none
+        // to a little wider than usual and back, so it catches the eye.
+        NCardHighlight glow = shown.CardHighlight;
+        glow.Modulate = NCardHighlight.gold;
+        if (glow.Material is not ShaderMaterial material) return;
+        void SetWidth(float w) => material.SetShaderParameter("width", w);
+        Tween pulse = shown.CreateTween().SetLoops();
+        pulse.TweenMethod(Callable.From<float>(SetWidth), 0f, SignalGlowWidth, 0.5).SetTrans(Tween.TransitionType.Sine);
+        pulse.TweenMethod(Callable.From<float>(SetWidth), SignalGlowWidth, 0f, 0.5).SetTrans(Tween.TransitionType.Sine);
+        _signals[teammate.NetId] = (shown, pulse);
+        ModLog.Info($"HandViewer: {teammate.NetId} is trying out your {((CardModel)t.Field("_displayedModel").GetValue()).Id.Entry}");
+    }
+
+    private static void StopSignals()
+    {
+        foreach (var (card, pulse) in _signals.Values)
+        {
+            pulse.Kill();
+            if (GodotObject.IsInstanceValid(card)) card.CardHighlight.AnimHide();
+        }
+        _signals.Clear();
     }
 
     // ---- hv7: hide your own hand ----

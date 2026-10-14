@@ -2,7 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Godot;
 
 namespace Spire2PileViewer;
@@ -10,14 +12,23 @@ namespace Spire2PileViewer;
 /// <summary>
 /// Persisted settings in %APPDATA%\SlayTheSpire2\spire2pileviewer_settings.json (same folder BetterSpire2
 /// keeps its layout in). Missing or unreadable file → defaults. Edited from the F1 menu (SettingsMenu).
+/// Read leniently, key by key (see <see cref="ParseLenient"/>), so files from older or newer versions load.
 /// </summary>
 public static class Settings
 {
     public const float MinScale = 0.5f;
     public const float MaxScale = 2.0f;
 
-    private sealed class Dto
+    /// <summary>
+    /// Layout of the settings file, written as "schemaVersion". Files without it come from v0.4.1 or older (same
+    /// keys, fewer of them). Bump it when a key changes meaning, and handle the old meaning in <see cref="Load"/>.
+    /// </summary>
+    public const int SchemaVersion = 1;
+
+    internal sealed class Dto
     {
+        public int schemaVersion { get; set; }
+        public string? modVersion { get; set; }
         public bool enabled { get; set; } = true;
         public float scale { get; set; } = 1f;
         public float opacity { get; set; } = 0.75f;
@@ -35,6 +46,8 @@ public static class Settings
         public float handShadow { get; set; } = 0.85f;
         public float handVisible { get; set; } = 0.20f;
         public float hoverDelay { get; set; } = 0.1f;
+        public int maxHandViewers { get; set; } = 1;
+        public string cardSignals { get; set; } = "both";
         public float handShadowHidden { get; set; } = 0.15f;
         public float[]? hideButtonOffset { get; set; }
     }
@@ -75,6 +88,24 @@ public static class Settings
     public static float HoverDelay = 0.1f;
 
     public const float MaxHoverDelay = 1f;
+
+    /// <summary>How many teammates' hands can be shown at once (stacked behind yours); more closes the oldest.</summary>
+    public static int MaxHandViewers = 1;
+
+    /// <summary>Up to every teammate in a 4-player game.</summary>
+    public const int MaxMaxHandViewers = 3;
+
+    /// <summary>
+    /// Hand Viewer card signals. Send: teammates see the card of theirs you look at or try out over your head.
+    /// Receive: your own card over a teammate's head blinks gold when they try it out.
+    /// </summary>
+    public enum CardSignalMode { Off, ReceiveOnly, SendAndReceive }
+
+    public static CardSignalMode CardSignals = CardSignalMode.SendAndReceive;
+
+    public static bool SendsCardSignals => CardSignals == CardSignalMode.SendAndReceive;
+
+    public static bool ReceivesCardSignals => CardSignals != CardSignalMode.Off;
 
     /// <summary>Drag offset of the "Hide hand" button from its default spot above the energy counter.</summary>
     public static Vector2 HideButtonOffset = Vector2.Zero;
@@ -131,13 +162,64 @@ public static class Settings
     }
 #endif
 
+    /// <summary>
+    /// Reads a settings file leniently: each key on its own, so a bad or unexpected value (hand-edited, another
+    /// version's format) only resets that one setting. Missing keys keep their defaults (older versions), unknown
+    /// keys are ignored (newer versions). Null if it isn't a JSON object at all. Problems are listed for the log.
+    /// </summary>
+    internal static Dto? ParseLenient(string json, List<string> problems)
+    {
+        JsonObject? root;
+        try
+        {
+            root = JsonNode.Parse(json) as JsonObject;
+        }
+        catch (JsonException ex)
+        {
+            problems.Add("the file (not JSON: " + ex.Message + ")");
+            return null;
+        }
+        if (root == null)
+        {
+            problems.Add("the file (not a JSON object)");
+            return null;
+        }
+        var dto = new Dto();
+        foreach (PropertyInfo prop in typeof(Dto).GetProperties())
+        {
+            if (!root.TryGetPropertyValue(prop.Name, out JsonNode? node)) continue;
+            try
+            {
+                object? value = node?.Deserialize(prop.PropertyType);
+                if (value == null && prop.PropertyType.IsValueType) throw new JsonException("null");
+                prop.SetValue(dto, value);
+            }
+            catch (Exception ex) when (ex is JsonException or InvalidOperationException or NotSupportedException or ArgumentException or FormatException)
+            {
+                problems.Add($"{prop.Name}={node?.ToJsonString() ?? "null"}");
+            }
+        }
+        return dto;
+    }
+
     public static void Load()
     {
         try
         {
             if (!File.Exists(FilePath)) return;
-            Dto? dto = JsonSerializer.Deserialize<Dto>(File.ReadAllText(FilePath));
+            var problems = new List<string>();
+            Dto? dto = ParseLenient(File.ReadAllText(FilePath), problems);
+            if (problems.Count > 0)
+            {
+                // Keep the file as it was: the next save drops whatever couldn't be read.
+                File.Copy(FilePath, FilePath + ".bak", overwrite: true);
+                ModLog.Info($"Settings: couldn't read {string.Join("; ", problems)} (defaults used; original kept as {Path.GetFileName(FilePath)}.bak)");
+            }
             if (dto == null) return;
+            if (dto.schemaVersion > SchemaVersion)
+            {
+                ModLog.Info($"Settings: written by a newer version ({dto.modVersion ?? "?"}, schema {dto.schemaVersion}); using the settings this version knows");
+            }
             Enabled = dto.enabled;
             Scale = Math.Clamp(dto.scale, MinScale, MaxScale);
             Opacity = Math.Clamp(dto.opacity, 0f, 1f);
@@ -161,6 +243,8 @@ public static class Settings
             HandVisible = Math.Clamp(dto.handVisible, 0f, 1f);
             HandShadowWhenHidden = Math.Clamp(dto.handShadowHidden, 0f, 1f);
             HoverDelay = Math.Clamp(dto.hoverDelay, 0f, MaxHoverDelay);
+            MaxHandViewers = Math.Clamp(dto.maxHandViewers, 1, MaxMaxHandViewers);
+            CardSignals = dto.cardSignals switch { "off" => CardSignalMode.Off, "receive" => CardSignalMode.ReceiveOnly, _ => CardSignalMode.SendAndReceive };
             HideButtonOffset = dto.hideButtonOffset is { Length: 2 } o ? new Vector2(o[0], o[1]) : Vector2.Zero;
             ModLog.Info($"Settings loaded: enabled={Enabled} scale={Scale} opacity={Opacity} showSelf={ShowSelf} textList={TextList} offsets={DescribeOffsets()}");
         }
@@ -176,6 +260,8 @@ public static class Settings
         {
             var dto = new Dto
             {
+                schemaVersion = SchemaVersion,
+                modVersion = SettingsMenu.VersionText,
                 enabled = Enabled,
                 scale = Scale,
                 opacity = Opacity,
@@ -191,6 +277,8 @@ public static class Settings
                 handVisible = HandVisible,
                 handShadowHidden = HandShadowWhenHidden,
                 hoverDelay = HoverDelay,
+                maxHandViewers = MaxHandViewers,
+                cardSignals = CardSignals switch { CardSignalMode.Off => "off", CardSignalMode.ReceiveOnly => "receive", _ => "both" },
                 hideButtonOffset = HideButtonOffset == Vector2.Zero ? null : new[] { HideButtonOffset.X, HideButtonOffset.Y },
             };
             File.WriteAllText(FilePath, JsonSerializer.Serialize(dto, new JsonSerializerOptions { WriteIndented = true }));
@@ -241,6 +329,8 @@ public static class Settings
         HandVisible = 0.20f;
         HandShadowWhenHidden = 0.15f;
         HoverDelay = 0.1f;
+        MaxHandViewers = 1;
+        CardSignals = CardSignalMode.SendAndReceive;
         HideButtonOffset = Vector2.Zero;
         Hotkeys.ResetDefaults(hand: true);
         Save();

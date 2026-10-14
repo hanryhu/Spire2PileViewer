@@ -5,6 +5,7 @@ using MegaCrit.Sts2.Core.Models.Enchantments;
 using MegaCrit.Sts2.Core.Models.Relics;
 using MegaCrit.Sts2.Core.Models.Powers;
 using MegaCrit.Sts2.Core.Models.Cards;
+using MegaCrit.Sts2.Core.Models.Encounters;
 using MegaCrit.Sts2.Core.GameActions;
 using MegaCrit.Sts2.Core.Saves;
 using MegaCrit.Sts2.Core.Nodes.Cards.Holders;
@@ -426,7 +427,21 @@ public static class AutoTest
         return Check($"mutator finished step {k}", MutatorPlayer.Gold >= _mutatorGold0 + k);
     }
 
-    private const int MutatorSteps = 4;
+    private const int MutatorSteps = 8;
+
+    // Mutator, steps 6-7: what the host showed over their head while we watched.
+    private static bool _watchHostHover;
+
+    private static readonly List<string> _hostHoverSeen = new();
+
+    private static async Task WatchHostHover()
+    {
+        while (_watchHostHover)
+        {
+            if (RunManager.Instance.HoveredModelTracker.GetHoveredModel(Host.NetId) is AbstractModel m) _hostHoverSeen.Add(m.Id.Entry);
+            await Wait(0.03);
+        }
+    }
 
     private static async Task Mutator()
     {
@@ -480,6 +495,8 @@ public static class AutoTest
                     RunManager.Instance.ActionQueueSynchronizer.RequestEnqueue(new PlayCardAction(strike, FirstEnemy));
                     await WaitUntil(() => !hand.Cards.Contains(strike), 10);
                 }
+                Send(me, $"card {Id<Lift>(ModelDb.AllCards)}"); // an ally-targeting card for the host to aim
+                await WaitUntil(() => hand.Cards.Any(c => c is Lift), 10);
                 await WaitUntil(() => NPlayerHand.Instance!.ActiveHolders.Count == hand.Cards.Count, 10);
                 await Wait(0.8);
                 foreach (string line in HandViewer.DumpOwnHand()) Log("REF1 " + line);
@@ -509,6 +526,58 @@ public static class AutoTest
                 await Wait(1.0); // glow tweens
                 Log($"REF2 energy={me.PlayerCombatState!.Energy} {HandViewer.DescribeOwnGlow()}");
                 break;
+            case 5:
+            {
+                // The host is aiming our Beat Into Shape from its Hand Viewer: we see it over the host's head,
+                // glowing (it's ours); then we play it out from under the host's aim.
+                CardModel? tried = hand.Cards.FirstOrDefault(c => c is BeatIntoShape);
+                var tracker = RunManager.Instance.HoveredModelTracker;
+                await WaitUntil(() => tried != null && tracker.GetHoveredModel(Host.NetId) == tried, 5);
+                Check("you see the card the host is trying out, over their head", tried != null && tracker.GetHoveredModel(Host.NetId) == tried,
+                    $"{tracker.GetHoveredModel(Host.NetId)?.Id.Entry ?? "nothing"}");
+                await WaitUntil(() => HandViewer.SignalGlowing(Host.NetId), 2);
+                var widths = new List<float>();
+                for (int i = 0; i < 24; i++)
+                {
+                    widths.Add(HandViewer.SignalGlowWidthNow(Host.NetId));
+                    await Wait(0.05);
+                }
+                Check("...blinking gold about once a second: it's yours", HandViewer.SignalGlowing(Host.NetId) && widths.Min() < 0.02f && widths.Max() > 0.06f,
+                    $"glow width {widths.Min():0.###}..{widths.Max():0.###} over 1.2 s");
+                if (tried == null) break;
+                Send(me, "energy 3");
+                await WaitUntil(() => me.PlayerCombatState!.Energy >= 1, 5);
+                RunManager.Instance.ActionQueueSynchronizer.RequestEnqueue(new PlayCardAction(tried, FirstEnemy));
+                await WaitUntil(() => !hand.Cards.Contains(tried), 10);
+                await WaitUntil(() => tracker.GetHoveredModel(Host.NetId) != tried, 5);
+                Check("...and gone once you play it", tracker.GetHoveredModel(Host.NetId) != tried && !HandViewer.SignalGlowing(Host.NetId));
+                break;
+            }
+            case 6:
+                // Start watching what's over the host's head (they hover one of our cards within its hover delay).
+                _hostHoverSeen.Clear();
+                _watchHostHover = true;
+                _ = TaskHelper.RunSafely(WatchHostHover());
+                break;
+            case 7:
+                _watchHostHover = false;
+                Check("nothing over the host's head while their hover delay runs", _hostHoverSeen.Count == 0,
+                    _hostHoverSeen.Count == 0 ? "nothing seen" : string.Join(",", _hostHoverSeen.Distinct()));
+                break;
+            case 8:
+            {
+                var tracker = RunManager.Instance.HoveredModelTracker;
+                await WaitUntil(() => tracker.GetHoveredModel(Host.NetId) is CardModel c && c.Owner == me, 3);
+                Check("once their closeup shows, you see your card over the host's head",
+                    tracker.GetHoveredModel(Host.NetId) is CardModel shown && shown.Owner == me, $"{tracker.GetHoveredModel(Host.NetId)?.Id.Entry ?? "nothing"}");
+                await WaitUntil(() => HandViewer.SignalGlowing(Host.NetId), 2);
+                bool glowing = HandViewer.SignalGlowing(Host.NetId);
+                Settings.CardSignals = Settings.CardSignalMode.Off;
+                await Wait(0.2);
+                Check("card signals Off: no gold on your card over their head", glowing && !HandViewer.SignalGlowing(Host.NetId), $"glowing before: {glowing}");
+                Settings.CardSignals = Settings.CardSignalMode.SendAndReceive;
+                break;
+            }
         }
     }
 
@@ -527,6 +596,19 @@ public static class AutoTest
         var teammates = PileViewer.Teammates();
         Player mutator = teammates.First(t => t.player.NetId == MutatorId).player;
         _hostGold0 = me.Gold;
+
+        // ---- Settings files from other versions (read without touching the real file) ----
+        var problems = new List<string>();
+        var old = Settings.ParseLenient("{\"enabled\":false,\"scale\":1.5,\"stripOffsets\":{\"1000\":[1,2]}}", problems);
+        Check("settings from an old version load (missing keys keep their defaults)", old != null && problems.Count == 0 && !old.enabled
+            && old.scale == 1.5f && old.schemaVersion == 0 && old.maxHandViewers == 1 && old.cardSignals == "both", string.Join("; ", problems));
+        problems.Clear();
+        var odd = Settings.ParseLenient("{\"schemaVersion\":99,\"scale\":\"big\",\"maxHandViewers\":[3],\"opacity\":0.5,\"handViewer\":null,\"future\":{\"x\":1}}", problems);
+        Check("bad values and a newer version's file: bad ones reset, the rest kept", odd != null && odd.schemaVersion == 99 && odd.scale == 1f
+            && odd.maxHandViewers == 1 && odd.opacity == 0.5f && odd.handViewer && problems.Count == 3, string.Join("; ", problems));
+        problems.Clear();
+        Check("a file that isn't JSON is rejected without a crash", Settings.ParseLenient("{not json", problems) == null && problems.Count == 1,
+            string.Join("; ", problems));
         _mutatorGold0 = mutator.Gold;
         Vector2 away = new(960f, 300f);
 
@@ -547,6 +629,11 @@ public static class AutoTest
             await Wait(0.1);
             Check("hovering a Pile Viewer lights that teammate's frame", PileViewer.RowHighlighted(MutatorId));
             Check("the name's own hand-count icon is hidden (the Pile Viewer shows it)", !PileViewer.NativeHandCountShown(MutatorId));
+            // The mutator's new relics fly in beside its name: above the Pile Viewer, not hidden behind it.
+            await WaitUntil(() => PileViewer.RowAnimationZ(MutatorId) != null, 5);
+            await Wait(0.1); // raised on the Pile Viewer's next frame
+            int? animationZ = PileViewer.RowAnimationZ(MutatorId);
+            Check("relics gained beside the name draw above the Pile Viewer", animationZ > 100, $"animation z {animationZ?.ToString() ?? "none seen"}");
             await WaitUntil(() => mutator.Creature.MaxHp >= 110, 10);
             await Wait(0.2);
             if (PileViewer.StripAndRow(MutatorId) is { } grown)
@@ -635,6 +722,12 @@ public static class AutoTest
         Check("Hand Viewer off: the Pile Viewer shrinks to 3 slots", withoutHand > 0f && withoutHand < withHand * 0.85f,
             $"width {withHand:0} → {withoutHand:0}");
         SettingsMenu.HandViewerToggle.ButtonPressed = true;
+        SettingsMenu.CardSignalButtons![1].ButtonPressed = true;
+        await Wait(0.1);
+        Check("card signals: Off / Receive only / Send + Receive; Receive only doesn't send", SettingsMenu.CardSignalButtons.Length == 3
+            && Settings.CardSignals == Settings.CardSignalMode.ReceiveOnly && !Settings.SendsCardSignals && Settings.ReceivesCardSignals,
+            $"{Settings.CardSignals}");
+        SettingsMenu.CardSignalButtons[2].ButtonPressed = true;
         await Wait(0.2);
         var (nativeCircle, ourCircle) = PileViewer.BadgeCircles(PileType.Draw);
         Check("bigger number badges, at most half the icon wide", ourCircle > nativeCircle * 1.1f && ourCircle <= PileViewer.SlotIconWidth / 2f + 0.01f,
@@ -681,8 +774,12 @@ public static class AutoTest
 
         // ---- Hand: default view and rendering ----
         Check("teammate's hand shown by default (lowest player number)", HandViewer.ViewedNetId == teammates[0].player.NetId, $"{HandViewer.ViewedNetId}");
+        HandViewer.View(null);
+        await Wait(0.2);
+        Check("eye of a hand not shown has the red slash", PileViewer.EyeSlashed(MutatorId));
         HandViewer.View(MutatorId);
         await Wait(0.3);
+        Check("eye of a shown hand is the plain eye", !PileViewer.EyeSlashed(MutatorId));
         var cards = HandViewer.ShownCards();
         var hand = PileType.Hand.GetPile(mutator).Cards;
         Check("every card of their hand is drawn, in order", cards.Select(c => c.Model).SequenceEqual(hand), $"{cards.Count} of {hand.Count}");
@@ -720,6 +817,7 @@ public static class AutoTest
         Check("hover waits for the delay", HandViewer.HoveredId != null && HandViewer.CloseupId == null, HandViewer.DescribeHover());
         await Wait(0.5);
         Check("closeup after the delay", HandViewer.CloseupId != null && HandViewer.CloseupId == HandViewer.HoveredId, HandViewer.DescribeHover());
+        Check("hovering a teammate's card lights their frame", PileViewer.RowHighlighted(MutatorId), HandViewer.DescribeHover());
         if (HandViewer.CloseupGeometry() is { } g)
         {
             (float bottom, float ownTop, float modulate) = g;
@@ -839,6 +937,24 @@ public static class AutoTest
                 await Mouse(away, null);
                 await Wait(0.3);
             }
+            // Lift (any ally): aiming it at you lights both frames, the card's owner and the target.
+            int lift = HandViewer.IndexOf(c => c is Lift);
+            if (Check("Lift in their hand", lift >= 0))
+            {
+                Vector2 from = Peek(lift), to = NCombatRoom.Instance!.GetCreatureNode(me.Creature)!.Hitbox.GetGlobalRect().GetCenter();
+                await Mouse(from, null);
+                await Mouse(from, true);
+                for (int i = 1; i <= 6; i++) await Mouse(from.Lerp(to, i / 6f), null);
+                await Wait(0.3);
+                string aimed = HandViewer.DescribeDragCard();
+                Check("Lift aims at an ally with the game's arrow", HandViewer.IsAiming, aimed);
+                Check("...lighting the owner's frame and the target's", PileViewer.RowHighlighted(MutatorId) && PileViewer.RowHighlighted(me),
+                    $"owner {PileViewer.RowHighlighted(MutatorId)}, target {PileViewer.RowHighlighted(me)}");
+                await RightClick(to);
+                await Mouse(to, false);
+                await Mouse(away, null);
+                await Wait(0.3);
+            }
         }
 
         // ---- Glow follows their turn and energy ----
@@ -856,6 +972,56 @@ public static class AutoTest
         {
             await Wait(1.0);
             Log($"VIEW2 energy={mutator.PlayerCombatState!.Energy} {HandViewer.DescribeTeammateGlow()}");
+        }
+
+        // ---- Trying out one of their cards: they see it over your head; they play it while you aim ----
+        int trying = HandViewer.IndexOf(c => c is BeatIntoShape);
+        if (Check("Beat Into Shape still in their hand", trying >= 0))
+        {
+            Vector2 from = Peek(trying), to = NCombatRoom.Instance!.GetCreatureNode(FirstEnemy)!.Hitbox.GetGlobalRect().GetCenter();
+            await Mouse(from, null);
+            await Mouse(from, true);
+            for (int i = 1; i <= 6; i++) await Mouse(from.Lerp(to, i / 6f), null);
+            await Wait(0.3);
+            Check("aiming one of their cards", HandViewer.IsAiming, HandViewer.DescribeDragCard());
+            await Ask(5);
+            await Wait(0.5);
+            Check("they play the card you're aiming: your aim ends cleanly", !HandViewer.IsDragging && !HandViewer.IsAiming
+                && !NTargetManager.Instance.IsInSelection && !PileType.Hand.GetPile(mutator).Cards.Any(c => c is BeatIntoShape),
+                $"dragging={HandViewer.IsDragging} aiming={HandViewer.IsAiming} selection={NTargetManager.Instance.IsInSelection}");
+            await Mouse(to, false);
+            await Mouse(away, null);
+            await Wait(0.3);
+        }
+
+        // ---- Hover delay: nothing goes over your head until the closeup shows (they watch the whole time) ----
+        if (await Ask(6))
+        {
+            Settings.HoverDelay = 0.9f;
+            int middle = HandViewer.MiddleIndexOf(_ => true);
+            await Mouse(Peek(middle), null);
+            await Wait(0.5); // well inside the 0.9 s delay
+            bool waiting = HandViewer.HoveredId != null && HandViewer.CloseupId == null;
+            string hover = HandViewer.DescribeHover();
+            await Mouse(away, null);
+            await Wait(0.3);
+            Check("hovered within the delay: no closeup yet", waiting, hover);
+            await Ask(7);
+            Settings.HoverDelay = 0f;
+            await Mouse(Peek(middle), null);
+            await Wait(0.2);
+            Check("instant hover: closeup shows", HandViewer.CloseupId != null, HandViewer.DescribeHover());
+            var tracker = RunManager.Instance.HoveredModelTracker;
+            Check("...and you send it (Send + Receive)", tracker.GetHoveredModel(me.NetId)?.Id.Entry == HandViewer.CloseupId, $"{tracker.GetHoveredModel(me.NetId)?.Id.Entry ?? "nothing"}");
+            await Ask(8);
+            Settings.CardSignals = Settings.CardSignalMode.ReceiveOnly;
+            await Wait(0.2);
+            Check("card signals Receive only: nothing sent", HandViewer.CloseupId != null && tracker.GetHoveredModel(me.NetId) == null,
+                $"closeup {HandViewer.CloseupId}, sent {tracker.GetHoveredModel(me.NetId)?.Id.Entry ?? "nothing"}");
+            Settings.CardSignals = Settings.CardSignalMode.SendAndReceive;
+            await Mouse(away, null);
+            Settings.HoverDelay = 0.1f;
+            await Wait(0.3);
         }
 
         // ---- Hotkey regressions ----
@@ -925,6 +1091,37 @@ public static class AutoTest
             await Wait(0.5);
             Check("eye switches to another teammate", HandViewer.ViewedNetId == 1001);
             foreach (string line in HandViewer.DumpTeammateCards()) Log("VIEW3 " + line);
+
+            // ---- Max Hand Viewers: stacked hands, the latest click on top ----
+            Settings.MaxHandViewers = 2;
+            HandViewer.View(MutatorId);
+            PileViewer.SimulatePress(PileViewer.StripIndexOf(1001), PileType.Hand);
+            await Mouse(away, null);
+            await Wait(0.6);
+            var stack = HandViewer.StackedHands();
+            string desc = string.Join("; ", stack.Select(s => $"{s.NetId}: layer {s.LayerIndex}, raised {s.Raise:0} (expected {s.Expected:0})"));
+            bool twoInOrder = stack.Select(s => s.NetId).SequenceEqual(new ulong[] { MutatorId, 1001 });
+            Check("two hands shown, the latest click on top", twoInOrder, desc);
+            Check("each hand one '% of card visible' step above the one below (20%, 40%)",
+                stack.Count == 2 && stack.All(s => Mathf.Abs(s.Raise - s.Expected) < 2f), desc);
+            Check("the lower hand is drawn in front", twoInOrder && stack[0].LayerIndex > stack[1].LayerIndex, desc);
+            Check("both shown hands' eyes are plain", !PileViewer.EyeSlashed(MutatorId) && !PileViewer.EyeSlashed(1001));
+            await Mouse(HandViewer.PeekPoint(HandViewer.MiddleIndexOf(_ => true))!.Value, null);
+            await Wait(0.3);
+            Check("hovering the top hand lights its owner's frame", HandViewer.HoveredOwnerNetId == 1001 && PileViewer.RowHighlighted(1001UL)
+                && !PileViewer.RowHighlighted(MutatorId), HandViewer.DescribeHover());
+            await Mouse(away, null);
+            await Wait(0.3);
+            PileViewer.SimulatePress(PileViewer.StripIndexOf(MutatorId), PileType.Hand);
+            await Wait(0.2);
+            Check("its eye closes just that hand", HandViewer.ViewedNetIds.SequenceEqual(new ulong[] { 1001 }), HandViewer.DescribeViewed());
+            PileViewer.SimulatePress(PileViewer.StripIndexOf(MutatorId), PileType.Hand);
+            await Wait(0.2);
+            Check("reopened, it goes on top", HandViewer.ViewedNetIds.SequenceEqual(new ulong[] { 1001, MutatorId }), HandViewer.DescribeViewed());
+            Settings.MaxHandViewers = 1;
+            await Wait(0.2);
+            Check("lowering Max Hand Viewers closes the least recently clicked", HandViewer.ViewedNetIds.SequenceEqual(new ulong[] { MutatorId })
+                && PileViewer.EyeSlashed(1001), HandViewer.DescribeViewed());
             HandViewer.View(MutatorId);
         }
 
@@ -972,8 +1169,8 @@ public static class AutoTest
         for (double t = 0; t < timeoutSeconds && !condition(); t += 0.05) await Wait(0.05);
     }
 
-    private static EncounterModel PickEncounter() =>
-        ModelDb.AllEncounters.First(e => e.RoomType == RoomType.Monster && e.IsWeak);
+    /// <summary>Every test fight: the Waterfall Giant (the user's favourite enemy).</summary>
+    private static EncounterModel PickEncounter() => ModelDb.AllEncounters.First(e => e is WaterfallGiantBoss);
 
     private static async Task Wait(double seconds)
     {

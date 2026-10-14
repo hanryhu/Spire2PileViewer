@@ -26,8 +26,34 @@ public static partial class HandViewer
     /// <summary>Show this teammate's hand, or nobody's (auto-test helper; same as clicking their eye).</summary>
     internal static void View(ulong? netId)
     {
-        ViewedNetId = netId;
+        _viewed.Clear();
+        if (netId is ulong id) _viewed.Add(id);
         _viewChosen = true;
+    }
+
+    /// <summary>The top shown hand (most recently clicked): what the single-hand checks look at (auto-test).</summary>
+    private static ShownHand? TopHand => _hands.Count > 0 ? _hands[^1] : null;
+
+    private static List<(CardModel Model, NHandCardHolder Holder)> TopCards => TopHand?.Cards ?? new();
+
+    /// <summary>
+    /// Shown hands, bottom first: owner, layer index, how far its cards actually sit above the native fan (layer
+    /// units, averaged over the cards not hovered or dragged), and k × "% of card visible" of a card (auto-test).
+    /// </summary>
+    internal static List<(ulong NetId, int LayerIndex, float Raise, float Expected)> StackedHands()
+    {
+        var result = new List<(ulong, int, float, float)>();
+        for (int k = 0; k < _hands.Count; k++)
+        {
+            ShownHand h = _hands[k];
+            if (!GodotObject.IsInstanceValid(h.Layer) || PileViewer.Teammates().FirstOrDefault(t => t.player.NetId == h.NetId).player is not Player p) continue;
+            var pile = PileType.Hand.GetPile(p).Cards.ToList();
+            var raises = h.Cards.Where(c => GodotObject.IsInstanceValid(c.Holder) && c.Holder != _focused && c.Holder != _drag && pile.Contains(c.Model))
+                .Select(c => HandPosHelper.GetPosition(pile.Count, pile.IndexOf(c.Model)).Y - c.Holder.Position.Y).ToList();
+            float expected = (k + 1) * Settings.HandVisible * CardHeight * HandPosHelper.GetScale(Math.Max(pile.Count, 1)).Y;
+            result.Add((h.NetId, h.Layer.GetIndex(), raises.Count > 0 ? raises.Average() : float.NaN, expected));
+        }
+        return result;
     }
 
     /// <summary>Hover state for the auto-test: hovered card, closeup shown, tooltips held back, input blocked.</summary>
@@ -38,24 +64,33 @@ public static partial class HandViewer
         h != null && GodotObject.IsInstanceValid(h) ? h.CardNode?.Model?.Id.Entry ?? "?" : "none";
 
     /// <summary>Index (in the shown teammate hand) of the first card matching, or -1 (auto-test).</summary>
-    internal static int IndexOf(Func<CardModel, bool> match) => _shown.FindIndex(s => match(s.Model));
+    internal static int IndexOf(Func<CardModel, bool> match) => TopCards.FindIndex(s => match(s.Model));
 
     /// <summary>Index of the matching card nearest the middle of the shown teammate hand, or -1 (auto-test).</summary>
-    internal static int MiddleIndexOf(Func<CardModel, bool> match) => Enumerable.Range(0, _shown.Count)
-        .Where(i => match(_shown[i].Model)).OrderBy(i => Math.Abs(i - (_shown.Count - 1) / 2.0)).DefaultIfEmpty(-1).First();
+    internal static int MiddleIndexOf(Func<CardModel, bool> match) => Enumerable.Range(0, TopCards.Count)
+        .Where(i => match(TopCards[i].Model)).OrderBy(i => Math.Abs(i - (TopCards.Count - 1) / 2.0)).DefaultIfEmpty(-1).First();
 
     /// <summary>The dragged card's cost and text (auto-test).</summary>
     internal static string DescribeDragCard() => _drag?.CardNode is NCard node ? DescribeCardNode(node) : "no drag";
 
     internal static bool IsDragging => _drag != null;
 
+    /// <summary>Whether the card over this teammate's head is glowing (it's yours) (auto-test).</summary>
+    internal static bool SignalGlowing(ulong netId) =>
+        _signals.TryGetValue(netId, out var s) && GodotObject.IsInstanceValid(s.Card) && s.Pulse.IsRunning();
+
+    /// <summary>Current width of that glow (0 = off) (auto-test).</summary>
+    internal static float SignalGlowWidthNow(ulong netId) =>
+        _signals.TryGetValue(netId, out var s) && GodotObject.IsInstanceValid(s.Card) && s.Card.CardHighlight.Material is ShaderMaterial m
+            ? m.GetShaderParameter("width").AsSingle() : float.NaN;
+
     internal static bool IsAiming => _targeting;
 
     /// <summary>Teammate cards shown, in hand order: model, the cost label drawn on the card, its glow (auto-test).</summary>
     internal static List<(CardModel Model, string Cost, string Glow)> ShownCards()
     {
-        if (_shownFor is not ulong id || PileViewer.Teammates().FirstOrDefault(t => t.player.NetId == id).player is not Player p) return new();
-        return PileType.Hand.GetPile(p).Cards.Select(c => _shown.FirstOrDefault(s => s.Model == c))
+        if (TopHand?.NetId is not ulong id || PileViewer.Teammates().FirstOrDefault(t => t.player.NetId == id).player is not Player p) return new();
+        return PileType.Hand.GetPile(p).Cards.Select(c => TopCards.FirstOrDefault(s => s.Model == c))
             .Where(s => s.Holder != null && GodotObject.IsInstanceValid(s.Holder))
             .Select(s => (s.Model, s.Holder.CardNode?.GetNodeOrNull<Label>("%EnergyLabel")?.Text ?? "?", DescribeGlow(s.Holder.CardNode))).ToList();
     }
@@ -88,7 +123,7 @@ public static partial class HandViewer
     }
 
     /// <summary>"Title=glow" for each teammate card shown, in hand order (auto-test).</summary>
-    internal static string DescribeTeammateGlow() => string.Join(", ", _shown
+    internal static string DescribeTeammateGlow() => string.Join(", ", TopCards
         .Where(s => GodotObject.IsInstanceValid(s.Holder))
         .Select(s => $"{s.Model.Title}={DescribeGlow(s.Holder.CardNode)}"));
 
@@ -99,7 +134,7 @@ public static partial class HandViewer
 
     /// <summary>Your own hand's look (auto-test): first card's body part colors.</summary>
     internal static string DescribeOwnHandLook() => NPlayerHand.Instance is NPlayerHand h
-        ? $"hand alpha={h.CardHolderContainer.Modulate.A:0.##} hitboxes={string.Join("/", h.ActiveHolders.Select(x => x.Hitbox.MouseFilter.ToString()[0]))} teammate shade={(_cardLayer != null && GodotObject.IsInstanceValid(_cardLayer) ? _cardLayer.Modulate.R.ToString("0.##") : "-")}"
+        ? $"hand alpha={h.CardHolderContainer.Modulate.A:0.##} hitboxes={string.Join("/", h.ActiveHolders.Select(x => x.Hitbox.MouseFilter.ToString()[0]))} teammate shade={(TopHand is ShownHand top && GodotObject.IsInstanceValid(top.Layer) ? top.Layer.Modulate.R.ToString("0.##") : "-")}"
         : "no hand";
 
     /// <summary>"ID|cost|description" for one rendered card (auto-test comparisons).</summary>
@@ -110,7 +145,7 @@ public static partial class HandViewer
 
     /// <summary>How the viewer currently renders the teammate's hand, one card per entry, in hand order (auto-test).</summary>
     internal static List<string> DumpTeammateCards() =>
-        _shown.Where(s => GodotObject.IsInstanceValid(s.Holder)).Select(s => DescribeCardNode(s.Holder.CardNode)).ToList();
+        TopCards.Where(s => GodotObject.IsInstanceValid(s.Holder)).Select(s => DescribeCardNode(s.Holder.CardNode)).ToList();
 
     /// <summary>How the game renders your own hand, in hand order (auto-test reference for the teammate's view).</summary>
     internal static List<string> DumpOwnHand() => NPlayerHand.Instance is NPlayerHand h
@@ -121,14 +156,14 @@ public static partial class HandViewer
     /// <summary>Middle of the part of a teammate card that peeks out above your hand (auto-test mouse target).</summary>
     internal static Vector2? PeekPoint(int index)
     {
-        if (index >= _shown.Count || !GodotObject.IsInstanceValid(_shown[index].Holder)) return null;
-        Rect2 rect = _shown[index].Holder.Hitbox.GetGlobalRect();
+        if (index >= TopCards.Count || !GodotObject.IsInstanceValid(TopCards[index].Holder)) return null;
+        Rect2 rect = TopCards[index].Holder.Hitbox.GetGlobalRect();
         return new Vector2(rect.GetCenter().X, rect.Position.Y + rect.Size.Y * Mathf.Max(Settings.HandVisible, 0.1f) * 0.5f);
     }
 
     internal static Vector2? CardCenter(int index) =>
-        index < _shown.Count && GodotObject.IsInstanceValid(_shown[index].Holder)
-            ? _shown[index].Holder.Hitbox.GetGlobalRect().GetCenter() : null;
+        index < TopCards.Count && GodotObject.IsInstanceValid(TopCards[index].Holder)
+            ? TopCards[index].Holder.Hitbox.GetGlobalRect().GetCenter() : null;
 
     /// <summary>Closeup vs your hand: its bottom edge, your hand's top edge, whether the mouse is on it (auto-test).</summary>
     internal static string DescribeCloseup()
@@ -145,9 +180,9 @@ public static partial class HandViewer
         : "none";
 
     /// <summary>Teammate cards currently drawn (auto-test).</summary>
-    internal static string DescribeCards() => _cardLayer == null || !GodotObject.IsInstanceValid(_cardLayer)
+    internal static string DescribeCards() => TopHand is not ShownHand top || !GodotObject.IsInstanceValid(top.Layer)
         ? "no layer"
-        : $"layer visible={_cardLayer.Visible} index={_cardLayer.GetIndex()} cards=" + string.Join(", ", _shown.Select(s =>
+        : $"layer visible={top.Layer.Visible} index={top.Layer.GetIndex()} cards=" + string.Join(", ", TopCards.Select(s =>
             $"{s.Model.Id.Entry}@({s.Holder.Position.X:0},{s.Holder.Position.Y:0}) cost={s.Holder.CardNode?.GetNodeOrNull<Label>("%EnergyLabel")?.Text}"));
 
     /// <summary>Your own hand's Hand Card Count label offsets (auto-test).</summary>
@@ -161,6 +196,6 @@ public static partial class HandViewer
     internal static string DescribeState()
     {
         string button = HideButton is Button b ? $"button '{b.Text}' visible={b.Visible} at {b.GlobalPosition}" : "no button";
-        return $"viewing={ViewedNetId?.ToString() ?? "nobody"} hideOwnHand={HideOwnHand} {button}";
+        return $"viewing={DescribeViewed()} hideOwnHand={HideOwnHand} {button}";
     }
 }
