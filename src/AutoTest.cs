@@ -702,9 +702,9 @@ public static class AutoTest
         Check("empty-pile bubbles name the teammate", bubbles.All(b => b.StartsWith(owner + "'s ") && !b.Contains("My ")),
             string.Join(" | ", bubbles));
 
-        // The game briefly shows a teammate's newly obtained relics beside their name, over the Pile Viewer; they
-        // let the mouse through, so this works while they play.
-        bool animating = PileViewer.RowAnimating(MutatorId);
+        // The game briefly shows a teammate's newly obtained relics beside their name, drawn over the Pile Viewer, and
+        // they take the mouse where they're drawn (what you see is what you click): drag once they're gone.
+        await WaitUntil(() => !PileViewer.RowAnimating(MutatorId), 10);
         if (PileViewer.SlotRect(MutatorId, PileType.Discard) is Rect2 slot)
         {
             Vector2 start = slot.GetCenter();
@@ -718,7 +718,7 @@ public static class AutoTest
             await Wait(0.2);
             Check("dragging a Pile Viewer moves it and opens nothing",
                 Settings.GetOffset(MutatorId).Length() > 50f && NCapstoneContainer.Instance?.InUse != true,
-                $"offset {Settings.GetOffset(MutatorId)}; {hit}; relic animation playing: {animating}");
+                $"offset {Settings.GetOffset(MutatorId)}; {hit}");
         }
 
         // ---- F1 menu ----
