@@ -45,7 +45,10 @@ public static partial class PileViewer
 
     // Relative to the creature node's origin. BetterSpire2's incoming-damage label sits at (10, -320);
     // the strip's bottom-center goes above that.
-    // Gap between a player's name block in the top-left player list (its hitbox = the gold frame) and their strip.
+    // Float alignment: the default spot above the character (bottom-centre of the Pile Viewer).
+    private static readonly Vector2 FloatAnchor = new(0f, -350f);
+
+    // Gap between a player's name block in the top-left player list and their Pile Viewer.
     private const float RowGap = 14f;
 
     /// <summary>Strip scale at the "Size 100%" setting: about as tall as a player's name + health bar.</summary>
@@ -250,6 +253,27 @@ public static partial class PileViewer
         NRun.Instance?.GlobalUi?.MultiplayerPlayerContainer?.GetChildren().OfType<NMultiplayerPlayerState>()
             .FirstOrDefault(row => row.Player == player);
 
+    /// <summary>
+    /// On-screen rect of a player's name block: from the row's left edge to whichever ends further right — the
+    /// visible name line (name, energy, ...) or the health bar, which the game widens with max HP (175 units at 80
+    /// max HP) — plus the game's 6-unit margin. Same rule the game uses to size the row's gold frame, computed
+    /// every frame (the game only re-measures it while the row is highlighted).
+    /// </summary>
+    internal static Rect2 NameBlockRect(NMultiplayerPlayerState row)
+    {
+        Rect2 rowRect = ScreenRect(row.Hitbox);
+        float right = rowRect.End.X;
+        if (row.GetNodeOrNull<Control>("TopInfoContainer") is Control top)
+        {
+            foreach (Control item in top.GetChildren().OfType<Control>())
+            {
+                if (item.Visible && item.Size.X > 0f) right = Mathf.Max(right, ScreenRect(item).End.X + 6f);
+            }
+        }
+        if (row.GetNodeOrNull<NHealthBar>("%HealthBar")?.HpBarContainer is Control bar) right = Mathf.Max(right, ScreenRect(bar).End.X + 6f);
+        return new Rect2(rowRect.Position, new Vector2(right - rowRect.Position.X, rowRect.Size.Y));
+    }
+
     /// <summary>A control's rect on screen (it and the player list can be on different canvas layers).</summary>
     internal static Rect2 ScreenRect(Control control)
     {
@@ -260,9 +284,12 @@ public static partial class PileViewer
     private static void UpdateWidget(NCombatRoom room, Widget widget)
     {
         NMultiplayerPlayerState? row = PlayerRow(widget.Player);
+        bool floating = Settings.Alignment == Settings.PileViewerAlignment.Float;
+        NCreature? creature = floating ? room.GetCreatureNode(widget.Player.Creature) : null;
         // Hide under full-screen overlays (pile screens, deck view, map, ...) — the strip would draw on top of them.
         bool overlayOpen = NCapstoneContainer.Instance?.InUse == true;
-        if (row == null || !row.IsVisibleInTree() || widget.Player.PlayerCombatState == null || overlayOpen)
+        bool anchored = floating ? creature != null : row != null && row.IsVisibleInTree();
+        if (!anchored || widget.Player.PlayerCombatState == null || overlayOpen)
         {
             if (row != null) HideNativeHandCount(row, false);
             widget.Root.Visible = false;
@@ -295,7 +322,7 @@ public static partial class PileViewer
         }
 
         // The strip's Hand slot shows the hand size, so the row's own hand-count icon is redundant.
-        HideNativeHandCount(row, Settings.HandViewerEnabled);
+        if (row != null) HideNativeHandCount(row, Settings.HandViewerEnabled);
 
         // Settings from the F1 menu: size and background opacity.
         if (widget.Root.Scale.X != StripScale) widget.Root.Scale = new Vector2(StripScale, StripScale);
@@ -305,13 +332,22 @@ public static partial class PileViewer
             widget.Style.BorderColor = new Color(StripBorder, Settings.Opacity);
         }
 
-        // Next to the player's row in the player list (fixed to the UI, unlike the characters, which move), plus
-        // the player's drag offset.
         Vector2 size = widget.Root.Size * StripScale;
-        Rect2 rowRect = ScreenRect(row.Hitbox);
-        Vector2 onScreen = new Vector2(rowRect.End.X + RowGap, rowRect.Position.Y + (rowRect.Size.Y - size.Y) / 2f)
-            + Settings.GetOffset(widget.Player.NetId);
-        widget.Root.GlobalPosition = widget.Root.GetCanvasTransform().AffineInverse() * onScreen;
+        if (floating)
+        {
+            // Float: centred above the character (moves with it), plus the player's drag offset.
+            widget.Root.GlobalPosition = creature!.GlobalPosition + FloatAnchor + Settings.GetOffset(widget.Player.NetId)
+                - new Vector2(size.X / 2f, size.Y);
+        }
+        else
+        {
+            // Fixed: right after the player's name block in the player list (fixed to the UI), plus the drag offset.
+            // Anchored at the centre of its left edge, so resizing keeps that point in place.
+            Rect2 block = NameBlockRect(row!);
+            Vector2 onScreen = new Vector2(block.End.X + RowGap, block.GetCenter().Y - size.Y / 2f)
+                + Settings.GetOffset(widget.Player.NetId);
+            widget.Root.GlobalPosition = widget.Root.GetCanvasTransform().AffineInverse() * onScreen;
+        }
 
         if (widget.Popup != null && widget.PopupLabel != null && GodotObject.IsInstanceValid(widget.Popup))
         {

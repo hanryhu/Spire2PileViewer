@@ -27,11 +27,11 @@ public static partial class PileViewer
     internal static string[]? StripCounts(ulong netId) =>
         _widgets.TryGetValue(netId, out var w) && GodotObject.IsInstanceValid(w.Root) && w.Root.Visible ? w.Counts.Select(c => c.Text).ToArray() : null;
 
-    /// <summary>On-screen rects of a player's strip and their name block (row hitbox = gold frame) in the player list (auto-test).</summary>
+    /// <summary>On-screen rects of a player's Pile Viewer and their name block in the player list (auto-test).</summary>
     internal static (Rect2 Strip, Rect2 Row)? StripAndRow(ulong netId)
     {
         if (!_widgets.TryGetValue(netId, out var w) || !GodotObject.IsInstanceValid(w.Root) || PlayerRow(w.Player) is not { } row) return null;
-        return (ScreenRect(w.Root), ScreenRect(row.Hitbox));
+        return (ScreenRect(w.Root), NameBlockRect(row));
     }
 
     /// <summary>Whether a player's row in the player list is lit (its gold frame) (auto-test).</summary>
@@ -42,6 +42,21 @@ public static partial class PileViewer
     /// <summary>Whether the row's native hand-count icon is showing (auto-test).</summary>
     internal static bool NativeHandCountShown(ulong netId) =>
         _widgets.TryGetValue(netId, out var w) && PlayerRow(w.Player)?.GetNodeOrNull<Control>("%CardCountContainer") is { } c && c.Visible;
+
+    /// <summary>On-screen end of a player's health bar in the player list (auto-test).</summary>
+    internal static float HealthBarEnd(ulong netId) =>
+        _widgets.TryGetValue(netId, out var w) && PlayerRow(w.Player)?.GetNodeOrNull<NHealthBar>("%HealthBar")?.HpBarContainer is Control bar
+            ? ScreenRect(bar).End.X : float.NaN;
+
+    /// <summary>The player's row is showing a "relic/card obtained" animation beside it (auto-test).</summary>
+    internal static bool RowAnimating(ulong netId) =>
+        _widgets.TryGetValue(netId, out var w) && PlayerRow(w.Player) is { } row
+        && row.GetChildren().Any(c => c is MegaCrit.Sts2.Core.Nodes.Relics.NRelic || c.GetType().Name == "NDeckHistoryEntry");
+
+    /// <summary>On-screen position of a player's character (auto-test).</summary>
+    internal static Vector2? CreatureScreenPos(ulong netId) =>
+        _widgets.TryGetValue(netId, out var w) && NCombatRoom.Instance?.GetCreatureNode(w.Player.Creature) is { } c
+            ? c.GetGlobalTransformWithCanvas().Origin : null;
 
     internal static Vector2 StripScaleOf(ulong netId) => _widgets.TryGetValue(netId, out var w) ? w.Root.Scale : Vector2.Zero;
 
@@ -71,7 +86,7 @@ public static partial class PileViewer
     /// <summary>On-screen rect of a slot on a player's strip (auto-test only).</summary>
     internal static Rect2? SlotRect(ulong netId, PileType pileType) =>
         _widgets.TryGetValue(netId, out var w) && w.Buttons[Array.IndexOf(StripSlots, pileType)] is Button b && b.IsVisibleInTree()
-            ? b.GetGlobalRect() : null;
+            ? ScreenRect(b) : null;
 
     /// <summary>Presses a slot on the first strip, as if clicked (auto-test only).</summary>
     internal static void SimulatePress(PileType pileType) => SimulatePress(0, pileType);

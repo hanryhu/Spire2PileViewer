@@ -438,6 +438,10 @@ public static class AutoTest
         Send(me, "draw 1");
         Send(me, $"card {first} Discard");
         Send(me, $"card {first} Exhaust");
+        // Max HP 70 → 114 (Big Mushroom +20, Mango +14, Pear +10): a longer health bar in the player list.
+        Send(me, $"relic {Id<BigMushroom>(ModelDb.AllRelics)}");
+        Send(me, $"relic {Id<Mango>(ModelDb.AllRelics)}");
+        Send(me, $"relic {Id<Pear>(ModelDb.AllRelics)}");
         if (!Full) return;
 
         for (int k = 1; k <= MutatorSteps; k++)
@@ -526,17 +530,26 @@ public static class AutoTest
         Vector2 away = new(960f, 300f);
 
         // ---- Strips ----
-        Check("a strip for every teammate", teammates.All(t => PileViewer.StripCounts(t.player.NetId) != null), PileViewer.DescribeState());
+        Check("a Pile Viewer for every teammate", teammates.All(t => PileViewer.StripCounts(t.player.NetId) != null), PileViewer.DescribeState());
         if (PileViewer.StripAndRow(MutatorId) is { } placed)
         {
-            Check("strip sits next to the teammate's name", placed.Strip.Position.X >= placed.Row.End.X
+            Check("Pile Viewer sits next to the teammate's name", placed.Strip.Position.X >= placed.Row.End.X
                 && Mathf.Abs(placed.Strip.GetCenter().Y - placed.Row.GetCenter().Y) < 12f && placed.Strip.Position.X - placed.Row.End.X < 20f
                 && placed.Strip.Size.Y <= placed.Row.Size.Y,
                 $"strip {placed.Strip}, row {placed.Row}");
             await Mouse(placed.Strip.GetCenter(), null);
             await Wait(0.1);
-            Check("hovering a strip lights that teammate's frame", PileViewer.RowHighlighted(MutatorId));
-            Check("the name's own hand-count icon is hidden (the strip shows it)", !PileViewer.NativeHandCountShown(MutatorId));
+            Check("hovering a Pile Viewer lights that teammate's frame", PileViewer.RowHighlighted(MutatorId));
+            Check("the name's own hand-count icon is hidden (the Pile Viewer shows it)", !PileViewer.NativeHandCountShown(MutatorId));
+            await WaitUntil(() => mutator.Creature.MaxHp >= 110, 10);
+            await Wait(0.2);
+            if (PileViewer.StripAndRow(MutatorId) is { } grown)
+            {
+                float bar = PileViewer.HealthBarEnd(MutatorId);
+                Check("a longer health bar (more max HP) moves the Pile Viewer right", mutator.Creature.MaxHp >= 110
+                    && grown.Strip.Position.X > bar && grown.Strip.Position.X - bar < 30f,
+                    $"max HP {mutator.Creature.MaxHp}, health bar ends {bar:0}, Pile Viewer starts {grown.Strip.Position.X:0}");
+            }
             await Mouse(new Vector2(960f, 300f), null);
             await Wait(0.1);
             Check("…and it goes out when the mouse leaves", !PileViewer.RowHighlighted(MutatorId));
@@ -554,29 +567,57 @@ public static class AutoTest
         await WaitUntil(() => NCapstoneContainer.Instance?.InUse != true, 3);
         Check("clicking it again closes it", NCapstoneContainer.Instance?.InUse != true);
 
+        // The game briefly shows a teammate's newly obtained relics beside their name (over the Pile Viewer).
+        await WaitUntil(() => !PileViewer.RowAnimating(MutatorId), 10);
         if (PileViewer.SlotRect(MutatorId, PileType.Discard) is Rect2 slot)
         {
             Vector2 start = slot.GetCenter();
+            await Mouse(start, null);
+            Control? under = ((SceneTree)Engine.GetMainLoop()).Root.GuiGetHoveredControl();
+            string hit = $"slot {slot}, under the mouse: {under?.GetPath().ToString() ?? "nothing"}";
             await Mouse(start, true);
             await Mouse(start + new Vector2(30f, -20f), null);
             await Mouse(start + new Vector2(60f, -40f), null);
             await Mouse(start + new Vector2(60f, -40f), false);
             await Wait(0.2);
-            Check("dragging a strip moves it and opens nothing",
-                Settings.GetOffset(MutatorId).Length() > 50f && NCapstoneContainer.Instance?.InUse != true, $"offset {Settings.GetOffset(MutatorId)}");
+            Check("dragging a Pile Viewer moves it and opens nothing",
+                Settings.GetOffset(MutatorId).Length() > 50f && NCapstoneContainer.Instance?.InUse != true, $"offset {Settings.GetOffset(MutatorId)}; {hit}");
         }
 
         // ---- F1 menu ----
         SettingsMenu.Open();
+        var beforeScale = PileViewer.StripAndRow(MutatorId);
         SettingsMenu.ScaleSlider!.Value = 150;
         await Wait(0.1);
-        Check("size slider scales the strips", Mathf.IsEqualApprox(PileViewer.StripScaleOf(MutatorId).X, 1.5f * PileViewer.BaseScale), $"{PileViewer.StripScaleOf(MutatorId)}");
+        if (beforeScale is { } b0 && PileViewer.StripAndRow(MutatorId) is { } b1)
+        {
+            Vector2 leftMid0 = new(b0.Strip.Position.X, b0.Strip.GetCenter().Y), leftMid1 = new(b1.Strip.Position.X, b1.Strip.GetCenter().Y);
+            Check("resizing keeps the centre of the left edge in place", leftMid0.DistanceTo(leftMid1) < 1.5f && b1.Strip.Size.X > b0.Strip.Size.X * 1.4f,
+                $"{leftMid0} → {leftMid1}, width {b0.Strip.Size.X:0} → {b1.Strip.Size.X:0}");
+        }
+        Check("size slider scales the Pile Viewers", Mathf.IsEqualApprox(PileViewer.StripScaleOf(MutatorId).X, 1.5f * PileViewer.BaseScale), $"{PileViewer.StripScaleOf(MutatorId)}");
         SettingsMenu.ScaleSlider.Value = 100;
         SettingsMenu.ResetPositionButton!.EmitSignal(BaseButton.SignalName.Pressed);
         Check("reset strip positions", Settings.GetOffset(MutatorId) == Vector2.Zero);
+        SettingsMenu.AlignmentButtons![1].ButtonPressed = true;
+        await Wait(0.1);
+        if (PileViewer.StripAndRow(MutatorId) is { } floated && PileViewer.CreatureScreenPos(MutatorId) is Vector2 body)
+        {
+            Check("Float alignment: centred above the character", Settings.Alignment == Settings.PileViewerAlignment.Float
+                && Mathf.Abs(floated.Strip.GetCenter().X - body.X) < 3f && floated.Strip.End.Y < body.Y,
+                $"Pile Viewer {floated.Strip}, character at {body}");
+        }
+        SettingsMenu.AlignmentButtons[0].ButtonPressed = true;
+        await Wait(0.1);
+        if (PileViewer.StripAndRow(MutatorId) is { } fixedAgain)
+        {
+            Check("Fixed alignment: back next to the name", Settings.Alignment == Settings.PileViewerAlignment.Fixed
+                && fixedAgain.Strip.Position.X >= fixedAgain.Row.End.X && fixedAgain.Strip.Position.X - fixedAgain.Row.End.X < 20f,
+                $"Pile Viewer {fixedAgain.Strip}, name block {fixedAgain.Row}");
+        }
         SettingsMenu.EnabledToggle!.ButtonPressed = false;
         await Wait(0.2);
-        Check("pile viewer off hides the strips but keeps the hand", PileViewer.StripCounts(MutatorId) == null && HandViewer.ShownCards().Count > 0);
+        Check("Pile Viewer off hides them but keeps the hand", PileViewer.StripCounts(MutatorId) == null && HandViewer.ShownCards().Count > 0);
         SettingsMenu.EnabledToggle.ButtonPressed = true;
         await Wait(0.2);
 

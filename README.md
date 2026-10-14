@@ -4,10 +4,10 @@ Slay the Spire 2 co-op mod: see your teammates' draw, exhaust, and discard piles
 
 Cosmetic only: teammates don't need the mod, and nothing you do with it is sent to them.
 
-![Strips next to each teammate's name](assets/strips.png)
+![A Pile Viewer next to each teammate's name](assets/strips.png)
 
-- Each teammate gets a strip next to their name with live pile counts. **Click** a pile to open it.
-- **Drag** a strip to move it.
+- Each teammate gets a Pile Viewer next to their name with live pile counts. **Click** a pile to open it.
+- **Drag** a Pile Viewer to move it. In F1, *Pile Viewer alignment*: **Fixed** (next to the names) or **Float** (above the characters).
 - Hotkeys: Shift+Z / V / C open teammate 1's draw / exhaust / discard pile (Ctrl+ for teammate 2,
   Ctrl+Shift+ for teammate 3). Rebind in F1, to keys or extra mouse buttons. The game's own hotkeys win.
 
@@ -18,7 +18,7 @@ Cosmetic only: teammates don't need the mod, and nothing you do with it is sent 
 - Your teammate's hand is shown behind yours, using the game's own cards with their live costs and playable glow.
 - **Hover** (or click) one of their cards to see it in full.
 - **Drag** one of their cards onto an enemy to preview its numbers against that enemy, from their state.
-- Click the **eye** in a strip to switch teammates or hide their hand (Shift+H, Ctrl+H, Ctrl+Shift+H).
+- Click the **eye** in a Pile Viewer to switch teammates or hide their hand (Shift+H, Ctrl+H, Ctrl+Shift+H).
 - **Hide hand** (or H) hides your own hand to read theirs.
 
 ![Teammate's hand behind yours](assets/hand-viewer.png)
