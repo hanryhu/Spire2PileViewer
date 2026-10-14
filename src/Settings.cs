@@ -26,6 +26,9 @@ public static class Settings
         // Offsets from the default spot next to each player's name (v0.3.2+; the old "stripOffsets" were relative to
         // the character and are ignored).
         public Dictionary<string, float[]>? stripPositions { get; set; }
+        // Float alignment: offsets from the default spot above the character (same key the pre-v0.4 versions used).
+        public Dictionary<string, float[]>? stripOffsets { get; set; }
+        public string alignment { get; set; } = "fixed";
         public Dictionary<string, string>? hotkeys { get; set; }
         public bool handViewer { get; set; } = true;
         public bool hideHandButton { get; set; } = true;
@@ -50,6 +53,12 @@ public static class Settings
 
     /// <summary>Clicking a slot shows a text list above the strip instead of the game's card screen.</summary>
     public static bool TextList;
+
+    /// <summary>Where the Pile Viewers sit: Fixed = next to each name in the player list (fixed to the UI);
+    /// Float = above each character (moves with the characters, which differ between fights).</summary>
+    public enum PileViewerAlignment { Fixed, Float }
+
+    public static PileViewerAlignment Alignment = PileViewerAlignment.Fixed;
 
     // ---- Hand Viewer (F1 → Hand Viewer tab) ----
 
@@ -82,12 +91,17 @@ public static class Settings
     /// </summary>
     private static readonly Dictionary<ulong, Vector2> _offsets = new();
 
-    public static Vector2 GetOffset(ulong netId) => _offsets.TryGetValue(netId, out Vector2 v) ? v : Vector2.Zero;
+    // Float alignment's own offsets (from the spot above the character).
+    private static readonly Dictionary<ulong, Vector2> _floatOffsets = new();
+
+    private static Dictionary<ulong, Vector2> CurrentOffsets => Alignment == PileViewerAlignment.Float ? _floatOffsets : _offsets;
+
+    public static Vector2 GetOffset(ulong netId) => CurrentOffsets.TryGetValue(netId, out Vector2 v) ? v : Vector2.Zero;
 
     public static void SetOffset(ulong netId, Vector2 offset)
     {
-        if (offset == Vector2.Zero) _offsets.Remove(netId);
-        else _offsets[netId] = offset;
+        if (offset == Vector2.Zero) CurrentOffsets.Remove(netId);
+        else CurrentOffsets[netId] = offset;
     }
 
     public static string DescribeOffsets() =>
@@ -134,6 +148,12 @@ public static class Settings
             {
                 if (ulong.TryParse(key, out ulong netId) && xy is { Length: 2 }) _offsets[netId] = new Vector2(xy[0], xy[1]);
             }
+            _floatOffsets.Clear();
+            foreach (var (key, xy) in dto.stripOffsets ?? new Dictionary<string, float[]>())
+            {
+                if (ulong.TryParse(key, out ulong netId) && xy is { Length: 2 }) _floatOffsets[netId] = new Vector2(xy[0], xy[1]);
+            }
+            Alignment = dto.alignment == "float" ? PileViewerAlignment.Float : PileViewerAlignment.Fixed;
             Hotkeys.Deserialize(dto.hotkeys);
             HandViewerEnabled = dto.handViewer;
             HideHandButtonEnabled = dto.hideHandButton;
@@ -162,6 +182,8 @@ public static class Settings
                 showSelf = ShowSelf,
                 textList = TextList,
                 stripPositions = _offsets.ToDictionary(kv => kv.Key.ToString(), kv => new[] { kv.Value.X, kv.Value.Y }),
+                stripOffsets = _floatOffsets.ToDictionary(kv => kv.Key.ToString(), kv => new[] { kv.Value.X, kv.Value.Y }),
+                alignment = Alignment == PileViewerAlignment.Float ? "float" : "fixed",
                 hotkeys = Hotkeys.Serialize(),
                 handViewer = HandViewerEnabled,
                 hideHandButton = HideHandButtonEnabled,
@@ -182,6 +204,7 @@ public static class Settings
     public static void ResetStripPositions()
     {
         _offsets.Clear();
+        _floatOffsets.Clear();
         Save();
         ModLog.Info("Settings: strip positions reset");
     }
@@ -202,6 +225,8 @@ public static class Settings
         ShowSelf = false;
         TextList = false;
         _offsets.Clear();
+        _floatOffsets.Clear();
+        Alignment = PileViewerAlignment.Fixed;
         Hotkeys.ResetDefaults(hand: false);
         Save();
         ModLog.Info("Settings: Pile Viewer reset to defaults");
