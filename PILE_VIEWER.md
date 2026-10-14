@@ -54,6 +54,12 @@ Logs: `%APPDATA%\SlayTheSpire2\spire2pileviewer_{host,1000,…}_log.txt`; game c
 
 Manual: `scripts/launch-mp.ps1 -Players 2` (no autotest) and click through.
 
+Publishing: `scripts/publish-workshop.ps1 [-ChangeNote "..."]` (Steam running, the user's go-ahead first): builds
+Release, uploads, then checks the live page — thumbnail and every preview must match the local files by SHA1.
+Previews are never re-sent under an existing name (Steam drops a preview that is "updated" unchanged — v0.3.1 lost
+all six that way): unchanged previews are left alone (no previews/ folder uploaded); changed ones go up under
+version-stamped names. Previews must each be < 1 MB.
+
 Dev vs. play: the dev build lives in `<game>\mods\Spire2PileViewer` only while testing. `test-settings.ps1 -Mode
 apply` (run by every launch script) installs it; `-Mode restore` (run at the end of automated tests) removes it,
 so normal play uses the Workshop subscription. With both present the game loads the higher version (the local
