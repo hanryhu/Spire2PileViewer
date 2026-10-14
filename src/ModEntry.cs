@@ -15,6 +15,16 @@ public static class ModEntry
         _initialized = true;
 
         ModLog.Init();
+#if DEBUG
+        if (AutoTest.Harness)
+        {
+            // Test fixtures only: none of the mod's own patches, so this instance is like a teammate without the
+            // Pile Viewer that the auto-test can still drive (see dev-autotest-mp.ps1 -Suite harness).
+            new Harmony("com.hanryhu.spire2pileviewer.harness").CreateClassProcessor(typeof(AutoTest.LobbyReadyPatch)).Patch();
+            ModLog.Info("ModEntry: harness instance (test fixtures only, no Pile Viewer)");
+            return;
+        }
+#endif
         Settings.Load();
         ModLog.Info("ModEntry.Init() starting");
 

@@ -161,6 +161,16 @@ public static partial class HandViewer
         return new Vector2(rect.GetCenter().X, rect.Position.Y + rect.Size.Y * Mathf.Max(Settings.HandVisible, 0.1f) * 0.5f);
     }
 
+    /// <summary>Peek point of the leftmost or rightmost card of one teammate's shown hand (auto-test mouse target).</summary>
+    internal static Vector2? PeekPointIn(ulong netId, bool rightmost)
+    {
+        var cards = _hands.FirstOrDefault(h => h.NetId == netId)?.Cards.Where(c => GodotObject.IsInstanceValid(c.Holder))
+            .OrderBy(c => c.Holder.Position.X).ToList();
+        if (cards == null || cards.Count == 0) return null;
+        Rect2 rect = (rightmost ? cards[^1] : cards[0]).Holder.Hitbox.GetGlobalRect();
+        return new Vector2(rect.GetCenter().X, rect.Position.Y + rect.Size.Y * Mathf.Max(Settings.HandVisible, 0.1f) * 0.5f);
+    }
+
     internal static Vector2? CardCenter(int index) =>
         index < TopCards.Count && GodotObject.IsInstanceValid(TopCards[index].Holder)
             ? TopCards[index].Holder.Hitbox.GetGlobalRect().GetCenter() : null;

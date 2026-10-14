@@ -1,16 +1,23 @@
-# Automated multiplayer test: build + install the mod, launch a host and (Players - 1) clients with
-# -pileviewerautotest, wait for every instance to finish, print the checks and a summary, close the
-# instances and restore normal settings. Exit code 1 if anything failed.
-#   -Suite fast (default, ~30 s): every feature once.
-#   -Suite full (up to 3 min per pass, before pushes): + cross-instance accuracy/glow, regressions, a second
-#          fight; runs twice: windowed 1280x720, then windowed at the primary monitor's resolution.
+# Automated multiplayer test: build + install the mod, launch a host and clients with -pileviewerautotest, wait
+# for every instance to finish, print the checks and a summary, close the instances and restore normal settings.
+# Exit code 1 if anything failed.
+#   -Suite fast (default, < 30 s): every feature once; windowed 1280x720, 2 players.
+#   -Suite full (< 90 s, before pushes): two passes —
+#        1. the full-only checks (cross-instance accuracy/glow, card signals, stacked hands, regressions, a second
+#           fight) at 1280x720 with 3 players;
+#        2. the fast checks again at the primary monitor's resolution (layout at another size), 2 players.
+#      -SkipFast drops pass 2 (when you've just run -Suite fast).
+#   -Suite harness: host + a teammate running only the test fixtures (-pileviewerharness: no Pile Viewer, like a
+#      teammate without the mod, but scriptable) + a modded teammate. Card signals across that boundary.
+#      Imperfect stand-in for vanilla (same mod list, so handshake/BaseLib behaviour isn't covered — use mixed).
 #   -Suite mixed -VanillaSide host|client: one side without mods; reach the fight by hand, then it runs.
-#   -WindowSizes 1280x720,2560x1440: override the window size(s) to run at (one pass each, always windowed).
+#   -WindowSizes 1280x720,2560x1440: override the window size of each pass, in order (always windowed).
 # Logs: %APPDATA%\SlayTheSpire2\spire2pileviewer_{host,1000,...}_log.txt (the last pass's)
 param(
-    [int]$Players = 2,
-    [ValidateSet('fast', 'full', 'mixed')][string]$Suite = 'fast',
+    [int]$Players = 0,
+    [ValidateSet('fast', 'full', 'harness', 'mixed')][string]$Suite = 'fast',
     [ValidateSet('', 'host', 'client')][string]$VanillaSide = '',
+    [switch]$SkipFast,
     [int]$TimeoutSeconds = 0,
     [string[]]$WindowSizes = @(),
     [string]$GameDir = 'C:\Program Files (x86)\Steam\steamapps\common\Slay the Spire 2'
@@ -32,37 +39,51 @@ else {
     Write-Host "No .NET 9 SDK at $dotnet - testing the existing build in src\bin\Debug." -ForegroundColor Yellow
 }
 
-if ($WindowSizes.Count -eq 0) {
-    $WindowSizes = @('1280x720')
-    if ($Suite -eq 'full') {
-        # The primary monitor's resolution in physical pixels (not DPI-scaled).
-        $gpu = Get-CimInstance Win32_VideoController | Where-Object { $_.CurrentHorizontalResolution } | Select-Object -First 1
-        if ($gpu) { $WindowSizes += "$($gpu.CurrentHorizontalResolution)x$($gpu.CurrentVerticalResolution)" }
-        $WindowSizes = @($WindowSizes | Select-Object -Unique)
-    }
+function Monitor() {
+    # The primary monitor's resolution in physical pixels (not DPI-scaled).
+    $gpu = Get-CimInstance Win32_VideoController | Where-Object { $_.CurrentHorizontalResolution } | Select-Object -First 1
+    if ($gpu) { "$($gpu.CurrentHorizontalResolution)x$($gpu.CurrentVerticalResolution)" } else { '1920x1080' }
 }
-if ($Suite -eq 'mixed') { $WindowSizes = @($WindowSizes[0]) } # played by hand: one pass
+function Pass($size, $players, $suiteArgs, $timeout, [switch]$Harness) {
+    @{ Size = $size; Players = $players; Args = $suiteArgs; Timeout = $timeout; Harness = [bool]$Harness }
+}
+$passes = @(switch ($Suite) {
+    'fast' { Pass '1280x720' ([Math]::Max($Players, 2)) @('-autotestsuite', 'fast') 90 }
+    'full' {
+        $list = @(Pass '1280x720' ([Math]::Max($Players, 3)) @('-autotestsuite', 'full', '-autotestskipfast') 150)
+        if (-not $SkipFast) { $list += Pass (Monitor) 2 @('-autotestsuite', 'fast') 90 }
+        $list
+    }
+    'harness' { Pass '1280x720' 3 @('-autotestsuite', 'harness') 150 -Harness }
+    'mixed' { Pass '1280x720' ([Math]::Max($Players, 2)) @('-autotestsuite', 'mixed') 900 }
+})
+for ($i = 0; $i -lt [Math]::Min($WindowSizes.Count, $passes.Count); $i++) { $passes[$i].Size = $WindowSizes[$i] }
 
 $logDir = Join-Path $env:APPDATA 'SlayTheSpire2'
-$names = @('host') + (0..($Players - 2) | ForEach-Object { "$(1000 + $_)" })
-if ($VanillaSide -eq 'host') { $names = $names | Where-Object { $_ -ne 'host' } }
-if ($VanillaSide -eq 'client') { $names = $names | Where-Object { $_ -ne '1000' } }
-$logs = $names | ForEach-Object { Join-Path $logDir "spire2pileviewer_$($_)_log.txt" }
-if ($TimeoutSeconds -le 0) { $TimeoutSeconds = @{ fast = 120; full = 300; mixed = 900 }[$Suite] }
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $failed = 0
 
-foreach ($size in $WindowSizes) {
-    if ($WindowSizes.Count -gt 1) { Write-Host "=== windowed $size ===" -ForegroundColor Cyan }
+foreach ($pass in $passes) {
+    $n = $pass.Players
+    $label = "$($pass.Args -join ' ') - windowed $($pass.Size), $n players"
+    if ($passes.Count -gt 1 -or $Suite -eq 'harness') { Write-Host "=== $label ===" -ForegroundColor Cyan }
     $started = Get-Date
+    $names = @('host') + (0..($n - 2) | ForEach-Object { "$(1000 + $_)" })
+    if ($VanillaSide -eq 'host') { $names = $names | Where-Object { $_ -ne 'host' } }
+    if ($VanillaSide -eq 'client') { $names = $names | Where-Object { $_ -ne '1000' } }
+    $logs = $names | ForEach-Object { Join-Path $logDir "spire2pileviewer_$($_)_log.txt" }
+    $timeout = if ($TimeoutSeconds -gt 0) { $TimeoutSeconds } else { $pass.Timeout }
+
     # launch-mp applies the test settings, which installs the dev build; the restore at the end removes it.
-    & (Join-Path $PSScriptRoot 'launch-mp.ps1') -Players $Players -GameDir $GameDir -VanillaSide $VanillaSide -QuietConsole `
-        -WindowSize $size -ExtraArgs '-pileviewerautotest', '-pileviewerplayers', $Players, '-autotestsuite', $Suite
+    $extra = @('-pileviewerautotest', '-pileviewerplayers', $n) + $pass.Args
+    $harness = [bool]$pass.Harness
+    & (Join-Path $PSScriptRoot 'launch-mp.ps1') -Players $n -GameDir $GameDir -VanillaSide $VanillaSide -QuietConsole `
+        -WindowSize $pass.Size -HarnessClient:$harness -ExtraArgs $extra | Out-Null
 
     # Wait for every modded instance to log "AutoTest: done".
-    $deadline = $started.AddSeconds($TimeoutSeconds)
+    $deadline = $started.AddSeconds($timeout)
     function Done($log) { (Test-Path $log) -and (Get-Item $log).LastWriteTime -gt $started -and (Select-String -Path $log -Pattern 'AutoTest: done' -Quiet -Encoding utf8) }
-    while ((Get-Date) -lt $deadline -and ($logs | Where-Object { -not (Done $_) })) { Start-Sleep -Milliseconds 500 }
+    while ((Get-Date) -lt $deadline -and ($logs | Where-Object { -not (Done $_) })) { Start-Sleep -Milliseconds 250 }
 
     # Report: every check, then the cross-instance dumps (REFn on a client == VIEWn on the host, as sets).
     foreach ($i in 0..($names.Count - 1)) {
@@ -74,7 +95,7 @@ foreach ($size in $WindowSizes) {
             elseif ($text -match 'RESULT') { Write-Host $text -ForegroundColor Cyan }
             else { Write-Host $text }
         }
-        if (-not (Done $logs[$i])) { $failed++; Write-Host "[$($names[$i])] did not finish within ${TimeoutSeconds}s" -ForegroundColor Red }
+        if (-not (Done $logs[$i])) { $failed++; Write-Host "[$($names[$i])] did not finish within ${timeout}s" -ForegroundColor Red }
     }
     function Dump($name, $tag) {
         $log = Join-Path $logDir "spire2pileviewer_$($name)_log.txt"
@@ -97,13 +118,13 @@ foreach ($size in $WindowSizes) {
 
     if ($Suite -ne 'mixed') {
         Get-Process SlayTheSpire2 -ErrorAction SilentlyContinue | Stop-Process -Force
-        Start-Sleep -Milliseconds 500
+        for ($t = 0; $t -lt 40 -and (Get-Process SlayTheSpire2 -ErrorAction SilentlyContinue); $t++) { Start-Sleep -Milliseconds 250 }
     }
 }
 
 if ($Suite -ne 'mixed') { & (Join-Path $PSScriptRoot 'test-settings.ps1') -Mode restore -GameDir $GameDir | Out-Null }
 $elapsed = ((Get-Date) - $runStarted).TotalSeconds
 $color = if ($failed -eq 0) { 'Green' } else { 'Red' }
-$where = if ($WindowSizes.Count -gt 1) { " (windowed $($WindowSizes -join ', '))" } else { '' }
-Write-Host ("{0} suite{1}: {2} in {3:0}s" -f $Suite, $where, $(if ($failed -eq 0) { 'ALL PASSED' } else { "$failed FAILED" }), $elapsed) -ForegroundColor $color
+$what = if ($Suite -eq 'full' -and $SkipFast) { 'full suite (without the fast pass)' } else { "$Suite suite" }
+Write-Host ("{0}: {1} in {2:0}s" -f $what, $(if ($failed -eq 0) { 'ALL PASSED' } else { "$failed FAILED" }), $elapsed) -ForegroundColor $color
 exit $(if ($failed -eq 0) { 0 } else { 1 })

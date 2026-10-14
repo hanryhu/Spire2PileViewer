@@ -54,7 +54,7 @@ public static class SettingsMenu
     internal static HSlider? HandShadowHiddenSlider;
     internal static HSlider? HoverDelaySlider;
 
-    internal static HSlider? MaxHandViewersSlider;
+    internal static Button[]? MaxHandViewersButtons;
 
     internal static Button[]? CardSignalButtons;
     internal static Button[]? AlignmentButtons;
@@ -442,8 +442,9 @@ public static class SettingsMenu
             v => Settings.HandViewerEnabled = v);
         HideHandButtonToggle = AddToggle(tab, "Show \"hide hand\" button", Settings.HideHandButtonEnabled,
             v => Settings.HideHandButtonEnabled = v);
-        MaxHandViewersSlider = AddSlider(tab, "Max Hand Viewers", 1f, Settings.MaxMaxHandViewers, Settings.MaxHandViewers,
-            v => Settings.MaxHandViewers = (int)Math.Round(v), step: 1, format: v => $"{v:0}");
+        MaxHandViewersButtons = AddChoice(tab, "Max Hand Viewers",
+            Enumerable.Range(1, Settings.MaxMaxHandViewers).Select(n => n.ToString()).ToArray(), Settings.MaxHandViewers - 1,
+            i => Settings.MaxHandViewers = i + 1, buttonWidth: 44f);
         CardSignalButtons = AddChoice(tab, "Hand Viewer card signals", new[] { "Off", "Receive only", "Send + Receive" },
             (int)Settings.CardSignals, i => Settings.CardSignals = (Settings.CardSignalMode)i, stacked: true);
         HandShadowSlider = AddSlider(tab, "Teammate hand shadow", 0f, 100f, Settings.HandShadow * 100f,
@@ -533,7 +534,8 @@ public static class SettingsMenu
 
     /// <summary>A label with one toggle button per choice (exactly one pressed).</summary>
     /// <param name="stacked">Label on its own line, buttons below (for choices too wide to share a line with it).</param>
-    private static Button[] AddChoice(VBoxContainer box, string text, string[] choices, int selected, Action<int> apply, bool stacked = false)
+    private static Button[] AddChoice(VBoxContainer box, string text, string[] choices, int selected, Action<int> apply, bool stacked = false,
+        float buttonWidth = 70f)
     {
         var row = new HBoxContainer();
         var label = new Label { Text = text, SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
@@ -555,7 +557,7 @@ public static class SettingsMenu
             var button = new Button
             {
                 Text = choices[i], ToggleMode = true, ButtonGroup = group, ButtonPressed = i == selected,
-                FocusMode = Control.FocusModeEnum.None, CustomMinimumSize = new Vector2(70f, 0f),
+                FocusMode = Control.FocusModeEnum.None, CustomMinimumSize = new Vector2(buttonWidth, 0f),
             };
             button.AddThemeFontSizeOverride("font_size", 14);
             int choice = i;
