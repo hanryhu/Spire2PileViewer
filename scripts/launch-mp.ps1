@@ -8,7 +8,9 @@ param(
     # Run one side without any mods (-nomods), to check that a teammate without this mod is fine.
     [ValidateSet('', 'host', 'client')][string]$VanillaSide = '',
     # Send each instance's console output to %TEMP%\sts2_<n>.out instead of this terminal (automated runs).
-    [switch]$QuietConsole
+    [switch]$QuietConsole,
+    # Window size (always windowed), e.g. 3840x1600 to test at the monitor's resolution.
+    [string]$WindowSize = '1280x720'
 )
 function Start-Game($gameArgs, $n) {
     if ($QuietConsole) {
@@ -21,8 +23,8 @@ function Start-Game($gameArgs, $n) {
 }
 
 $exe = Join-Path $GameDir 'SlayTheSpire2.exe'
-# Windowed 1280x720 + steam_appid.txt (restore later with: test-settings.ps1 -Mode restore).
-& (Join-Path $PSScriptRoot 'test-settings.ps1') -Mode apply -GameDir $GameDir
+# Windowed (1280x720 by default) + steam_appid.txt (restore later with: test-settings.ps1 -Mode restore).
+& (Join-Path $PSScriptRoot 'test-settings.ps1') -Mode apply -GameDir $GameDir -WindowSize $WindowSize
 if (-not $?) { exit 1 }
 
 $hostArgs = @('-fastmp', 'host_standard') + $ExtraArgs

@@ -53,6 +53,7 @@ public static class SettingsMenu
     internal static HSlider? HandVisibleSlider;
     internal static HSlider? HandShadowHiddenSlider;
     internal static HSlider? HoverDelaySlider;
+    internal static Button[]? AlignmentButtons;
     private static int _selectedTab;
     internal static OptionButton? TeammatePicker;
     internal static Button? GetHotkeyButton(int slot) => _hotkeyButtons[slot];
@@ -266,12 +267,14 @@ public static class SettingsMenu
             v => Settings.Scale = (float)v / 100f);
         OpacitySlider = AddSlider(box, "Background opacity", 0f, 100f, Settings.Opacity * 100f,
             v => Settings.Opacity = (float)v / 100f);
+        AlignmentButtons = AddChoice(box, "Pile Viewer alignment", new[] { "Fixed", "Float" }, (int)Settings.Alignment,
+            i => Settings.Alignment = (Settings.PileViewerAlignment)i);
         ShowSelfToggle = AddToggle(box, "Show my own piles", Settings.ShowSelf, v => Settings.ShowSelf = v);
         TextListToggle = AddToggle(box, "Show piles as text", Settings.TextList, v => Settings.TextList = v);
 
         AddHotkeysSection(box);
 
-        ResetPositionButton = AddButton(box, "Reset strip positions", Settings.ResetStripPositions);
+        ResetPositionButton = AddButton(box, "Reset Pile Viewer positions", Settings.ResetStripPositions);
         ResetAllButton = AddButton(box, "Reset Pile Viewer settings", () =>
         {
             Settings.ResetPileViewer();
@@ -518,6 +521,38 @@ public static class SettingsMenu
         };
         box.AddChild(slider);
         return slider;
+    }
+
+    /// <summary>A label with one toggle button per choice (exactly one pressed).</summary>
+    private static Button[] AddChoice(VBoxContainer box, string text, string[] choices, int selected, Action<int> apply)
+    {
+        var row = new HBoxContainer();
+        box.AddChild(row);
+        var label = new Label { Text = text, SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
+        label.AddThemeFontSizeOverride("font_size", 14);
+        row.AddChild(label);
+        var group = new ButtonGroup();
+        var buttons = new Button[choices.Length];
+        for (int i = 0; i < choices.Length; i++)
+        {
+            var button = new Button
+            {
+                Text = choices[i], ToggleMode = true, ButtonGroup = group, ButtonPressed = i == selected,
+                FocusMode = Control.FocusModeEnum.None, CustomMinimumSize = new Vector2(70f, 0f),
+            };
+            button.AddThemeFontSizeOverride("font_size", 14);
+            int choice = i;
+            button.Toggled += on =>
+            {
+                if (!on) return;
+                apply(choice);
+                Settings.Save();
+                ModLog.Info($"SettingsMenu: '{text}' = {choices[choice]}");
+            };
+            row.AddChild(button);
+            buttons[i] = button;
+        }
+        return buttons;
     }
 
     private static Button AddButton(VBoxContainer box, string text, Action onPressed)
