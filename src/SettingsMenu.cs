@@ -53,6 +53,8 @@ public static class SettingsMenu
     internal static HSlider? HandVisibleSlider;
     internal static HSlider? HandShadowHiddenSlider;
     internal static HSlider? HoverDelaySlider;
+
+    internal static HSlider? MaxHandViewersSlider;
     internal static Button[]? AlignmentButtons;
     private static int _selectedTab;
     internal static OptionButton? TeammatePicker;
@@ -438,6 +440,8 @@ public static class SettingsMenu
             v => Settings.HandViewerEnabled = v);
         HideHandButtonToggle = AddToggle(tab, "Show \"hide hand\" button", Settings.HideHandButtonEnabled,
             v => Settings.HideHandButtonEnabled = v);
+        MaxHandViewersSlider = AddSlider(tab, "Max Hand Viewers", 1f, Settings.MaxMaxHandViewers, Settings.MaxHandViewers,
+            v => Settings.MaxHandViewers = (int)Math.Round(v), step: 1, format: v => $"{v:0}");
         HandShadowSlider = AddSlider(tab, "Teammate hand shadow", 0f, 100f, Settings.HandShadow * 100f,
             v => Settings.HandShadow = (float)v / 100f);
         HandVisibleSlider = AddSlider(tab, "% of card visible", 0f, 100f, Settings.HandVisible * 100f,

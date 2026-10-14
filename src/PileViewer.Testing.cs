@@ -39,6 +39,10 @@ public static partial class PileViewer
         _widgets.TryGetValue(netId, out var w) && PlayerRow(w.Player) is { } row
         && Traverse.Create(row).Field<bool>("_isHighlighted").Value;
 
+    /// <summary>Same, for any player (also yourself, who has no Pile Viewer) (auto-test).</summary>
+    internal static bool RowHighlighted(Player player) =>
+        PlayerRow(player) is { } row && Traverse.Create(row).Field<bool>("_isHighlighted").Value;
+
     /// <summary>Whether the row's native hand-count icon is showing (auto-test).</summary>
     internal static bool NativeHandCountShown(ulong netId) =>
         _widgets.TryGetValue(netId, out var w) && PlayerRow(w.Player)?.GetNodeOrNull<Control>("%CardCountContainer") is { } c && c.Visible;
@@ -76,6 +80,18 @@ public static partial class PileViewer
     }
 
     internal static float SlotIconWidth => SlotSize;
+
+    /// <summary>Whether the Hand slot's eye has the red slash (that hand isn't shown) (auto-test).</summary>
+    internal static bool EyeSlashed(ulong netId) => _widgets.TryGetValue(netId, out var w) && w.HandSlash?.Visible == true;
+
+    /// <summary>ZIndex of the row's relic / potion / card animations (what the animation patch set), or null (auto-test).</summary>
+    internal static int? RowAnimationZ(ulong netId) =>
+        _widgets.TryGetValue(netId, out var w) && PlayerRow(w.Player) is { } row
+            ? row.GetChildren().OfType<Control>().Where(IsRowAnimation)
+                .Select(c => (int?)c.ZIndex).FirstOrDefault()
+            : null;
+
+
 
     /// <summary>On-screen position of a player's character (auto-test).</summary>
     internal static Vector2? CreatureScreenPos(ulong netId) =>

@@ -65,6 +65,26 @@ public static partial class PileViewer
     // Launch with -pileviewerself to also show a strip for the local player (handy for solo testing).
     private static readonly bool IncludeSelf = OS.GetCmdlineArgs().Contains("-pileviewerself");
 
+    // Pile Viewers draw above the combat scene; the player list's relic/potion/card animations draw above them.
+    private const int StripZ = 100;
+
+    internal const int AboveStripZ = StripZ + 1;
+
+    /// <summary>
+    /// A relic, potion or card a player gains or loses flies in or out beside their name (NMultiplayerPlayerState
+    /// adds it to the row for the animation); keep it above the Pile Viewer instead of hidden behind it.
+    /// </summary>
+    private static void RaiseRowAnimations(Control row)
+    {
+        foreach (Node child in row.GetChildren())
+        {
+            if (child is Control c && c.ZIndex != AboveStripZ && IsRowAnimation(c)) c.ZIndex = AboveStripZ;
+        }
+    }
+
+    internal static bool IsRowAnimation(Node node) =>
+        node is MegaCrit.Sts2.Core.Nodes.Relics.NRelic || node.GetType().Name is "NDeckHistoryEntry" or "NPotion";
+
     private sealed class Widget
     {
         public required Player Player;
@@ -74,6 +94,9 @@ public static partial class PileViewer
         public readonly Control?[] Icons = new Control?[StripSlots.Length];
         public readonly Control?[] Badges = new Control?[StripSlots.Length];
         public readonly Button?[] Buttons = new Button?[StripSlots.Length];
+
+        // Red slash over the Hand slot's eye while that hand isn't shown.
+        public Control? HandSlash;
 
         // Text popup listing one pile's cards (milestone 2); null when closed.
         public PanelContainer? Popup;
@@ -116,14 +139,19 @@ public static partial class PileViewer
     }
 
     /// <summary>
-    /// Mouse over a strip lights up that player's frame in the player list (NMultiplayerPlayerStateContainer
-    /// .HighlightPlayer — what hovering their character does), so it's clear whose piles these are.
+    /// Mouse over a Pile Viewer, or over (or dragging) a card of a teammate's shown hand, lights up that player's frame
+    /// in the player list (NMultiplayerPlayerStateContainer.HighlightPlayer — what hovering their character does),
+    /// so it's clear whose piles or cards these are.
     /// </summary>
     private static void UpdateHoverHighlight()
     {
         Vector2 mouse = HandViewer.LastMouse;
         Player? hovered = _widgets.Values.FirstOrDefault(w => GodotObject.IsInstanceValid(w.Root) && w.Root.IsVisibleInTree()
             && ScreenRect(w.Root).HasPoint(mouse))?.Player;
+        if (hovered == null && HandViewer.HoveredOwnerNetId is ulong owner)
+        {
+            hovered = Teammates().FirstOrDefault(t => t.player.NetId == owner).player;
+        }
         SetHighlight(hovered);
     }
 
@@ -345,8 +373,9 @@ public static partial class PileViewer
                 // Highlight the Hand slot whose hand is being shown (on your own strip: while your hand is shown).
                 bool viewing = widget.Player.NetId == (RunManager.Instance?.NetService?.NetId ?? 0)
                     ? !HandViewer.HideOwnHand
-                    : HandViewer.ViewedNetId == widget.Player.NetId;
-                if (widget.Icons[i] is Control eye) eye.Modulate = viewing ? new Color(1.3f, 1.15f, 0.55f) : Colors.White;
+                    : HandViewer.IsViewing(widget.Player.NetId);
+                // Shown: the plain eye; not shown: a red slash across it.
+                if (widget.HandSlash != null) widget.HandSlash.Visible = !viewing;
             }
             string text = StripSlots[i].GetPile(widget.Player).Cards.Count.ToString();
             if (widget.Counts[i].Text == text) continue;
@@ -362,6 +391,7 @@ public static partial class PileViewer
 
         // The strip's Hand slot shows the hand size, so the row's own hand-count icon is redundant.
         if (row != null) HideNativeHandCount(row, Settings.HandViewerEnabled);
+        if (row != null) RaiseRowAnimations(row);
 
         // Settings from the F1 menu: size and background opacity.
         if (widget.Root.Scale.X != StripScale) widget.Root.Scale = new Vector2(StripScale, StripScale);
@@ -421,7 +451,7 @@ public static partial class PileViewer
         var root = new PanelContainer
         {
             Name = $"Spire2PileViewer_{player.NetId}",
-            ZIndex = 100,
+            ZIndex = StripZ,
             MouseFilter = Control.MouseFilterEnum.Stop,
             TooltipText = DragHint,
         };
@@ -519,9 +549,36 @@ public static partial class PileViewer
         badge.AddChild(count);
         count.SetAnchorsAndOffsetsPreset(Control.LayoutPreset.FullRect);
 
-        if (pileType == PileType.Hand) button.Pressed += () => HandViewer.Toggle(widget.Player);
+        if (pileType == PileType.Hand)
+        {
+            widget.HandSlash = CreateSlash();
+            button.AddChild(widget.HandSlash);
+            button.Pressed += () => HandViewer.Toggle(widget.Player);
+        }
         else button.Pressed += () => OnSlotPressed(widget, pileType);
         return button;
+    }
+
+    /// <summary>A red slash from the bottom-left to the top-right of a slot, with a dark edge so it reads on any icon.</summary>
+    private static Control CreateSlash()
+    {
+        var slash = new Control { MouseFilter = Control.MouseFilterEnum.Ignore, Size = new Vector2(SlotSize, SlotSize) };
+        const float inset = 11f;
+        var from = new Vector2(inset, SlotSize - inset);
+        var to = new Vector2(SlotSize - inset, inset);
+        foreach (var (width, color) in new[] { (8f, new Color(0.1f, 0f, 0f, 0.85f)), (4.5f, new Color(0.92f, 0.16f, 0.12f)) })
+        {
+            slash.AddChild(new Line2D
+            {
+                Points = new[] { from, to },
+                Width = width,
+                DefaultColor = color,
+                BeginCapMode = Line2D.LineCapMode.Round,
+                EndCapMode = Line2D.LineCapMode.Round,
+                Antialiased = true,
+            });
+        }
+        return slash;
     }
 
     private const string DragHint = "Drag to move";

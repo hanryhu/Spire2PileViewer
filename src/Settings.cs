@@ -35,6 +35,7 @@ public static class Settings
         public float handShadow { get; set; } = 0.85f;
         public float handVisible { get; set; } = 0.20f;
         public float hoverDelay { get; set; } = 0.1f;
+        public int maxHandViewers { get; set; } = 1;
         public float handShadowHidden { get; set; } = 0.15f;
         public float[]? hideButtonOffset { get; set; }
     }
@@ -75,6 +76,12 @@ public static class Settings
     public static float HoverDelay = 0.1f;
 
     public const float MaxHoverDelay = 1f;
+
+    /// <summary>How many teammates' hands can be shown at once (stacked behind yours); more closes the oldest.</summary>
+    public static int MaxHandViewers = 1;
+
+    /// <summary>Up to every teammate in a 4-player game.</summary>
+    public const int MaxMaxHandViewers = 3;
 
     /// <summary>Drag offset of the "Hide hand" button from its default spot above the energy counter.</summary>
     public static Vector2 HideButtonOffset = Vector2.Zero;
@@ -161,6 +168,7 @@ public static class Settings
             HandVisible = Math.Clamp(dto.handVisible, 0f, 1f);
             HandShadowWhenHidden = Math.Clamp(dto.handShadowHidden, 0f, 1f);
             HoverDelay = Math.Clamp(dto.hoverDelay, 0f, MaxHoverDelay);
+            MaxHandViewers = Math.Clamp(dto.maxHandViewers, 1, MaxMaxHandViewers);
             HideButtonOffset = dto.hideButtonOffset is { Length: 2 } o ? new Vector2(o[0], o[1]) : Vector2.Zero;
             ModLog.Info($"Settings loaded: enabled={Enabled} scale={Scale} opacity={Opacity} showSelf={ShowSelf} textList={TextList} offsets={DescribeOffsets()}");
         }
@@ -191,6 +199,7 @@ public static class Settings
                 handVisible = HandVisible,
                 handShadowHidden = HandShadowWhenHidden,
                 hoverDelay = HoverDelay,
+                maxHandViewers = MaxHandViewers,
                 hideButtonOffset = HideButtonOffset == Vector2.Zero ? null : new[] { HideButtonOffset.X, HideButtonOffset.Y },
             };
             File.WriteAllText(FilePath, JsonSerializer.Serialize(dto, new JsonSerializerOptions { WriteIndented = true }));
@@ -241,6 +250,7 @@ public static class Settings
         HandVisible = 0.20f;
         HandShadowWhenHidden = 0.15f;
         HoverDelay = 0.1f;
+        MaxHandViewers = 1;
         HideButtonOffset = Vector2.Zero;
         Hotkeys.ResetDefaults(hand: true);
         Save();
