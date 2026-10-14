@@ -18,6 +18,7 @@ public static class Patches
         typeof(IntentChangedPatch),
 #if DEBUG
         typeof(AutoTest.LobbyReadyPatch), // auto-test only; not in Release builds
+        typeof(AutoTest.PeerInputSendPatch),
 #endif
         typeof(SettingsMenu.InputPatch),
         typeof(SettingsMenu.HotkeyDispatchPatch),

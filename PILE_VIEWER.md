@@ -28,20 +28,28 @@ Each milestone is one or more commits ending in an annotated tag `mN`, so testin
 
 ## Dev loop
 
-`scripts/dev-autotest-mp.ps1 [-Suite fast|full] [-Players N]` (game closed) is the one command: builds (when
+`scripts/dev-autotest-mp.ps1 [-Suite fast|full|harness] [-SkipFast]` (game closed) is the one command: builds (when
 the .NET 9 SDK is reachable), installs, launches a host + clients with `-fastmp` + `-pileviewerautotest`, waits,
 prints every `CHECK PASS|FAIL`, compares the cross-instance dumps, closes the games, restores normal settings
-and exits non-zero on failure.
+and exits non-zero on failure. Every test fight is against WATERFALL_GIANT_BOSS.
 
-- `fast` (default, ~30 s incl. launch): every feature once — strips (live counts, pile screen, drag, F1
-  size/off/reset), hotkeys (conflict blocking, mouse button, console precedence), Hand Viewer (default view,
-  every card + cost drawn, Hide hand + H, own strip's eye, hover delay/sideways/click, closeup position and
-  shade, your card play blocks hover, aim preview with Vulnerable, nothing gets played).
-- `full` (≤ 3 min — run before pushes): fast + the host's view vs the teammate's own screen (cost/number
-  changers, glow after End Turn / undo / spent energy), Beat Into Shape forge from the teammate's hits,
-  Echoing Slash all-enemies preview, hotkey regressions (game key warning, a key moved off the game, absent
-  teammate duplicate, hand hotkey), hover delay ends, 3rd player (`-Players 3`), whose hand carries over to
-  the next fight.
+- `fast` (default, < 30 s incl. launch; 2 players at 1280x720): every feature once — settings files from other
+  versions, Pile Viewers (placement/cap, max-HP push, hover frame, relic animations above them, live counts, pile
+  screen, empty-pile bubbles, drag, F1 size/alignment/off/reset, badges), hotkeys (conflict blocking, mouse
+  button, console precedence), Hand Viewer (default view, eye slash, every card + cost drawn, Hide hand + H, own
+  strip's eye, hover delay/sideways/click, closeup position and shade, hover frame, your card play blocks hover,
+  aim preview with Vulnerable, nothing gets played), the card-signal and Max Hand Viewers menu choices.
+- `full` (< 90 s — run before pushes): pass 1 = the full-only checks at 1280x720 with 3 players — the host's view
+  vs the teammate's own screen (cost/number changers, glow after End Turn / undo / spent energy), Beat Into Shape
+  forge, Echoing Slash all-enemies preview, Lift at you, card signals both ways (over-your-head card, gold blink,
+  nothing during the hover delay, Off / Receive only, peer-input message count), the teammate playing the card
+  you aim, hotkey regressions, stacked hands (20%/40%, order, delay restarts between hands, trim), the next
+  fight; pass 2 = the fast checks at the monitor's resolution. `-SkipFast` drops pass 2 (after a `fast` run).
+- `harness` (~20 s; 3 players): the first client runs with `-pileviewerharness` — test fixtures only, none of
+  the mod's patches — standing in for a teammate without the mod: card signals across that boundary (nothing
+  during the delay, card over the host's head without gold, played out from under the host's aim) plus a
+  modded third player. Same mod list on every instance, so it doesn't cover handshake/BaseLib behaviour — keep
+  real vanilla (`mixed`) for that.
 - `mixed -VanillaSide host|client`: one side launched `-nomods`; reach the first fight by playing, then the
   modded side uses every feature on the unmodded teammate.
 

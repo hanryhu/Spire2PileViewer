@@ -30,6 +30,7 @@ using MegaCrit.Sts2.Core.Helpers;
 using MegaCrit.Sts2.Core.Map;
 using MegaCrit.Sts2.Core.Models;
 using MegaCrit.Sts2.Core.Multiplayer.Game;
+using MegaCrit.Sts2.Core.Multiplayer.Game.PeerInput;
 using MegaCrit.Sts2.Core.Multiplayer.Game.Lobby;
 using MegaCrit.Sts2.Core.Nodes;
 using MegaCrit.Sts2.Core.Nodes.Debug;
@@ -191,6 +192,15 @@ public static class AutoTest
     }
 
     private static bool _started;
+
+    /// <summary>Peer-input messages this game sent (the game's cursor/hover/targeting sync), for the network check.</summary>
+    internal static int PeerInputSends;
+
+    [HarmonyPatch(typeof(PeerInputSynchronizer), "SendSyncMessage")]
+    public static class PeerInputSendPatch
+    {
+        private static void Postfix() => PeerInputSends++;
+    }
 
     [HarmonyPatch(typeof(NCharacterSelectScreen), "AfterInitialized")]
     public static class LobbyReadyPatch
@@ -991,12 +1001,13 @@ public static class AutoTest
         // ---- Glow follows their turn and energy ----
         if (await Ask(2))
         {
-            await Wait(0.4);
+            // Their end of turn reaches us shortly after their reply; the glow refreshes 4x a second.
+            await WaitUntil(() => HandViewer.ShownCards().All(c => c.Glow == "-"), 2);
             Check("no glow once they've ended their turn", HandViewer.ShownCards().All(c => c.Glow == "-"), HandViewer.DescribeTeammateGlow());
         }
         if (await Ask(3))
         {
-            await Wait(0.4);
+            await WaitUntil(() => HandViewer.ShownCards().Any(c => c.Glow == "playable"), 2);
             Check("glow back after they undo it", HandViewer.ShownCards().Any(c => c.Glow == "playable"), HandViewer.DescribeTeammateGlow());
         }
         if (await Ask(4))
@@ -1054,6 +1065,28 @@ public static class AutoTest
             Settings.HoverDelay = 0.1f;
             await Wait(0.3);
         }
+
+        // ---- Network: card signals ride on the game's own cursor messages (at most one per 50 ms) ----
+        async Task<int> Sweep(Settings.CardSignalMode mode)
+        {
+            Settings.CardSignals = mode;
+            Settings.HoverDelay = 0f;
+            await Mouse(away, null);
+            await Wait(0.3);
+            int before = PeerInputSends;
+            Vector2 left = HandViewer.PeekPointIn(MutatorId, rightmost: false)!.Value, right = HandViewer.PeekPointIn(MutatorId, rightmost: true)!.Value;
+            for (int i = 0; i <= 20; i++) await Mouse(left.Lerp(right, i / 20f), null);
+            for (int i = 20; i >= 0; i--) await Mouse(left.Lerp(right, i / 20f), null);
+            await Mouse(away, null);
+            await Wait(0.3);
+            return PeerInputSends - before;
+        }
+        int quiet = await Sweep(Settings.CardSignalMode.Off);
+        int signalling = await Sweep(Settings.CardSignalMode.SendAndReceive);
+        Settings.HoverDelay = 0.1f;
+        Log($"network: {quiet} peer-input messages with card signals off, {signalling} with Send + Receive (same 42 mouse moves across their cards)");
+        Check("card signals add no network messages (they ride on the game's cursor updates)", quiet > 0 && signalling <= quiet + 3,
+            $"{quiet} messages with signals off, {signalling} with Send + Receive, over 42 mouse moves across their cards");
 
         // ---- Hotkey regressions ----
         int row = MutatorRow;
