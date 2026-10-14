@@ -23,7 +23,9 @@ public static class Settings
         public float opacity { get; set; } = 0.75f;
         public bool showSelf { get; set; }
         public bool textList { get; set; }
-        public Dictionary<string, float[]>? stripOffsets { get; set; }
+        // Offsets from the default spot next to each player's name (v0.3.2+; the old "stripOffsets" were relative to
+        // the character and are ignored).
+        public Dictionary<string, float[]>? stripPositions { get; set; }
         public Dictionary<string, string>? hotkeys { get; set; }
         public bool handViewer { get; set; } = true;
         public bool hideHandButton { get; set; } = true;
@@ -75,8 +77,8 @@ public static class Settings
     public static float HandVisible = 0.20f;
 
     /// <summary>
-    /// Per-strip drag offsets relative to the default spot above the character, keyed by the player's NetId
-    /// (their Steam id online), so each teammate's strip keeps its own position across sessions.
+    /// Per-strip drag offsets from the default spot next to each player's name in the player list, keyed by the
+    /// player's NetId (their Steam id online), so each teammate's strip keeps its own position across sessions.
     /// </summary>
     private static readonly Dictionary<ulong, Vector2> _offsets = new();
 
@@ -128,7 +130,7 @@ public static class Settings
             ShowSelf = dto.showSelf;
             TextList = dto.textList;
             _offsets.Clear();
-            foreach (var (key, xy) in dto.stripOffsets ?? new Dictionary<string, float[]>())
+            foreach (var (key, xy) in dto.stripPositions ?? new Dictionary<string, float[]>())
             {
                 if (ulong.TryParse(key, out ulong netId) && xy is { Length: 2 }) _offsets[netId] = new Vector2(xy[0], xy[1]);
             }
@@ -159,7 +161,7 @@ public static class Settings
                 opacity = Opacity,
                 showSelf = ShowSelf,
                 textList = TextList,
-                stripOffsets = _offsets.ToDictionary(kv => kv.Key.ToString(), kv => new[] { kv.Value.X, kv.Value.Y }),
+                stripPositions = _offsets.ToDictionary(kv => kv.Key.ToString(), kv => new[] { kv.Value.X, kv.Value.Y }),
                 hotkeys = Hotkeys.Serialize(),
                 handViewer = HandViewerEnabled,
                 hideHandButton = HideHandButtonEnabled,
