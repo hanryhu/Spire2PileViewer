@@ -55,6 +55,8 @@ public static class SettingsMenu
     internal static HSlider? HoverDelaySlider;
 
     internal static HSlider? MaxHandViewersSlider;
+
+    internal static Button[]? CardSignalButtons;
     internal static Button[]? AlignmentButtons;
     private static int _selectedTab;
     internal static OptionButton? TeammatePicker;
@@ -442,6 +444,8 @@ public static class SettingsMenu
             v => Settings.HideHandButtonEnabled = v);
         MaxHandViewersSlider = AddSlider(tab, "Max Hand Viewers", 1f, Settings.MaxMaxHandViewers, Settings.MaxHandViewers,
             v => Settings.MaxHandViewers = (int)Math.Round(v), step: 1, format: v => $"{v:0}");
+        CardSignalButtons = AddChoice(tab, "Hand Viewer card signals", new[] { "Off", "Receive only", "Send + Receive" },
+            (int)Settings.CardSignals, i => Settings.CardSignals = (Settings.CardSignalMode)i, stacked: true);
         HandShadowSlider = AddSlider(tab, "Teammate hand shadow", 0f, 100f, Settings.HandShadow * 100f,
             v => Settings.HandShadow = (float)v / 100f);
         HandVisibleSlider = AddSlider(tab, "% of card visible", 0f, 100f, Settings.HandVisible * 100f,
@@ -528,13 +532,22 @@ public static class SettingsMenu
     }
 
     /// <summary>A label with one toggle button per choice (exactly one pressed).</summary>
-    private static Button[] AddChoice(VBoxContainer box, string text, string[] choices, int selected, Action<int> apply)
+    /// <param name="stacked">Label on its own line, buttons below (for choices too wide to share a line with it).</param>
+    private static Button[] AddChoice(VBoxContainer box, string text, string[] choices, int selected, Action<int> apply, bool stacked = false)
     {
         var row = new HBoxContainer();
-        box.AddChild(row);
         var label = new Label { Text = text, SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
         label.AddThemeFontSizeOverride("font_size", 14);
-        row.AddChild(label);
+        if (stacked)
+        {
+            box.AddChild(label);
+            box.AddChild(row);
+        }
+        else
+        {
+            box.AddChild(row);
+            row.AddChild(label);
+        }
         var group = new ButtonGroup();
         var buttons = new Button[choices.Length];
         for (int i = 0; i < choices.Length; i++)

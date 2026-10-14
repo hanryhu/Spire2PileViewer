@@ -570,6 +570,12 @@ public static class AutoTest
                 await WaitUntil(() => tracker.GetHoveredModel(Host.NetId) is CardModel c && c.Owner == me, 3);
                 Check("once their closeup shows, you see your card over the host's head",
                     tracker.GetHoveredModel(Host.NetId) is CardModel shown && shown.Owner == me, $"{tracker.GetHoveredModel(Host.NetId)?.Id.Entry ?? "nothing"}");
+                await WaitUntil(() => HandViewer.SignalGlowing(Host.NetId), 2);
+                bool glowing = HandViewer.SignalGlowing(Host.NetId);
+                Settings.CardSignals = Settings.CardSignalMode.Off;
+                await Wait(0.2);
+                Check("card signals Off: no gold on your card over their head", glowing && !HandViewer.SignalGlowing(Host.NetId), $"glowing before: {glowing}");
+                Settings.CardSignals = Settings.CardSignalMode.SendAndReceive;
                 break;
             }
         }
@@ -590,6 +596,19 @@ public static class AutoTest
         var teammates = PileViewer.Teammates();
         Player mutator = teammates.First(t => t.player.NetId == MutatorId).player;
         _hostGold0 = me.Gold;
+
+        // ---- Settings files from other versions (read without touching the real file) ----
+        var problems = new List<string>();
+        var old = Settings.ParseLenient("{\"enabled\":false,\"scale\":1.5,\"stripOffsets\":{\"1000\":[1,2]}}", problems);
+        Check("settings from an old version load (missing keys keep their defaults)", old != null && problems.Count == 0 && !old.enabled
+            && old.scale == 1.5f && old.schemaVersion == 0 && old.maxHandViewers == 1 && old.cardSignals == "both", string.Join("; ", problems));
+        problems.Clear();
+        var odd = Settings.ParseLenient("{\"schemaVersion\":99,\"scale\":\"big\",\"maxHandViewers\":[3],\"opacity\":0.5,\"handViewer\":null,\"future\":{\"x\":1}}", problems);
+        Check("bad values and a newer version's file: bad ones reset, the rest kept", odd != null && odd.schemaVersion == 99 && odd.scale == 1f
+            && odd.maxHandViewers == 1 && odd.opacity == 0.5f && odd.handViewer && problems.Count == 3, string.Join("; ", problems));
+        problems.Clear();
+        Check("a file that isn't JSON is rejected without a crash", Settings.ParseLenient("{not json", problems) == null && problems.Count == 1,
+            string.Join("; ", problems));
         _mutatorGold0 = mutator.Gold;
         Vector2 away = new(960f, 300f);
 
@@ -612,6 +631,7 @@ public static class AutoTest
             Check("the name's own hand-count icon is hidden (the Pile Viewer shows it)", !PileViewer.NativeHandCountShown(MutatorId));
             // The mutator's new relics fly in beside its name: above the Pile Viewer, not hidden behind it.
             await WaitUntil(() => PileViewer.RowAnimationZ(MutatorId) != null, 5);
+            await Wait(0.1); // raised on the Pile Viewer's next frame
             int? animationZ = PileViewer.RowAnimationZ(MutatorId);
             Check("relics gained beside the name draw above the Pile Viewer", animationZ > 100, $"animation z {animationZ?.ToString() ?? "none seen"}");
             await WaitUntil(() => mutator.Creature.MaxHp >= 110, 10);
@@ -702,6 +722,12 @@ public static class AutoTest
         Check("Hand Viewer off: the Pile Viewer shrinks to 3 slots", withoutHand > 0f && withoutHand < withHand * 0.85f,
             $"width {withHand:0} → {withoutHand:0}");
         SettingsMenu.HandViewerToggle.ButtonPressed = true;
+        SettingsMenu.CardSignalButtons![1].ButtonPressed = true;
+        await Wait(0.1);
+        Check("card signals: Off / Receive only / Send + Receive; Receive only doesn't send", SettingsMenu.CardSignalButtons.Length == 3
+            && Settings.CardSignals == Settings.CardSignalMode.ReceiveOnly && !Settings.SendsCardSignals && Settings.ReceivesCardSignals,
+            $"{Settings.CardSignals}");
+        SettingsMenu.CardSignalButtons[2].ButtonPressed = true;
         await Wait(0.2);
         var (nativeCircle, ourCircle) = PileViewer.BadgeCircles(PileType.Draw);
         Check("bigger number badges, at most half the icon wide", ourCircle > nativeCircle * 1.1f && ourCircle <= PileViewer.SlotIconWidth / 2f + 0.01f,
@@ -985,7 +1011,14 @@ public static class AutoTest
             await Mouse(Peek(middle), null);
             await Wait(0.2);
             Check("instant hover: closeup shows", HandViewer.CloseupId != null, HandViewer.DescribeHover());
+            var tracker = RunManager.Instance.HoveredModelTracker;
+            Check("...and you send it (Send + Receive)", tracker.GetHoveredModel(me.NetId)?.Id.Entry == HandViewer.CloseupId, $"{tracker.GetHoveredModel(me.NetId)?.Id.Entry ?? "nothing"}");
             await Ask(8);
+            Settings.CardSignals = Settings.CardSignalMode.ReceiveOnly;
+            await Wait(0.2);
+            Check("card signals Receive only: nothing sent", HandViewer.CloseupId != null && tracker.GetHoveredModel(me.NetId) == null,
+                $"closeup {HandViewer.CloseupId}, sent {tracker.GetHoveredModel(me.NetId)?.Id.Entry ?? "nothing"}");
+            Settings.CardSignals = Settings.CardSignalMode.SendAndReceive;
             await Mouse(away, null);
             Settings.HoverDelay = 0.1f;
             await Wait(0.3);

@@ -133,6 +133,7 @@ public static partial class HandViewer
     /// <summary>Per-frame update while in combat (called by PileViewer).</summary>
     internal static void Update(NCombatRoom room, Func<ulong, Player?> findPlayer)
     {
+        if (!Settings.ReceivesCardSignals && _signals.Count > 0) StopSignals(); // turned off while one was blinking
         if (!Settings.HandViewerEnabled)
         {
             if (_hands.Count > 0 || HideOwnHand || _hideButton != null) Reset();
@@ -327,6 +328,7 @@ public static partial class HandViewer
     /// </summary>
     private static void SyncHover(CardModel? model)
     {
+        if (!Settings.SendsCardSignals) model = null;
         if (model == _syncedHover) return;
         var tracker = RunManager.Instance?.HoveredModelTracker;
         if (tracker == null) return;
@@ -752,7 +754,7 @@ public static partial class HandViewer
         holder.Hitbox.MouseFilter = Control.MouseFilterEnum.Ignore; // like the game: don't block what's under the card
         // Like dragging your own card: the game shows teammates the card over your head (its own sync message, so
         // players without the mod see it too).
-        if (holder.CardNode?.Model is CardModel model) RunManager.Instance?.HoveredModelTracker?.OnLocalCardSelected(model);
+        if (Settings.SendsCardSignals && holder.CardNode?.Model is CardModel model) RunManager.Instance?.HoveredModelTracker?.OnLocalCardSelected(model);
         ModLog.Info($"HandViewer: preview drag {holder.CardNode?.Model?.Id.Entry}");
     }
 
@@ -909,7 +911,8 @@ public static partial class HandViewer
     {
         var t = Traverse.Create(handler);
         if (t.Field("_player").GetValue() is not Player teammate) return;
-        bool mine = t.Field("_displayedModel").GetValue() is CardModel card && card.Owner?.NetId == LocalNetId && teammate.NetId != LocalNetId;
+        bool mine = Settings.ReceivesCardSignals && t.Field("_displayedModel").GetValue() is CardModel card && card.Owner?.NetId == LocalNetId
+            && teammate.NetId != LocalNetId;
         NCard? shownNode = handler.CardIntent.GetNodeOrNull<NCard>("%Card");
         if (mine && _signals.TryGetValue(teammate.NetId, out var current) && current.Card == shownNode && current.Pulse.IsValid()) return;
         if (_signals.Remove(teammate.NetId, out var old))
@@ -929,6 +932,16 @@ public static partial class HandViewer
         pulse.TweenMethod(Callable.From<float>(SetWidth), SignalGlowWidth, 0f, 0.5).SetTrans(Tween.TransitionType.Sine);
         _signals[teammate.NetId] = (shown, pulse);
         ModLog.Info($"HandViewer: {teammate.NetId} is trying out your {((CardModel)t.Field("_displayedModel").GetValue()).Id.Entry}");
+    }
+
+    private static void StopSignals()
+    {
+        foreach (var (card, pulse) in _signals.Values)
+        {
+            pulse.Kill();
+            if (GodotObject.IsInstanceValid(card)) card.CardHighlight.AnimHide();
+        }
+        _signals.Clear();
     }
 
     // ---- hv7: hide your own hand ----
