@@ -14,6 +14,7 @@ using MegaCrit.Sts2.Core.Nodes.Cards.Holders;
 using MegaCrit.Sts2.Core.Nodes;
 using MegaCrit.Sts2.Core.Nodes.Combat;
 using MegaCrit.Sts2.Core.Nodes.Multiplayer;
+using HarmonyLib;
 using MegaCrit.Sts2.Core.Nodes.HoverTips;
 using MegaCrit.Sts2.Core.Nodes.Rooms;
 using MegaCrit.Sts2.Core.Nodes.Screens.Capstones;
@@ -730,6 +731,9 @@ public static partial class HandViewer
         NHoverTipSet.Remove(holder);
         holder.BeginDrag();
         holder.Hitbox.MouseFilter = Control.MouseFilterEnum.Ignore; // like the game: don't block what's under the card
+        // Like dragging your own card: the game shows teammates the card over your head (its own sync message, so
+        // players without the mod see it too).
+        if (holder.CardNode?.Model is CardModel model) RunManager.Instance?.HoveredModelTracker?.OnLocalCardSelected(model);
         ModLog.Info($"HandViewer: preview drag {holder.CardNode?.Model?.Id.Entry}");
     }
 
@@ -808,6 +812,7 @@ public static partial class HandViewer
         if (_multiShown && holder.CardNode?.Model is CardModel card) ShowMultiTargeting(card, false);
         _multiShown = false;
         _drag = null;
+        RunManager.Instance?.HoveredModelTracker?.OnLocalCardDeselected();
         _clicked = null;
         if (GodotObject.IsInstanceValid(holder))
         {
@@ -866,6 +871,38 @@ public static partial class HandViewer
         _focused = null;
         for (int i = _hands.Count - 1; i >= 0; i--) RemoveHand(i);
         _glow.Clear();
+    }
+
+    // ---- hv11: a teammate trying out one of your cards ----
+
+    /// <summary>Card over a teammate's head (the game's multiplayer intent) that is glowing because it's yours, by teammate.</summary>
+    private static readonly Dictionary<ulong, (NCard Card, Tween Pulse)> _signals = new();
+
+    /// <summary>
+    /// The game shows the card a teammate hovers or drags over their head. When it's one of *your* cards (they're
+    /// trying it out from their Hand Viewer — a hint to play it), it pulses with a gold glow. Called after the game
+    /// updates that intent.
+    /// </summary>
+    internal static void OnTeammateIntentChanged(NMultiplayerPlayerIntentHandler handler)
+    {
+        var t = Traverse.Create(handler);
+        if (t.Field("_player").GetValue() is not Player teammate) return;
+        bool mine = t.Field("_displayedModel").GetValue() is CardModel card && card.Owner?.NetId == LocalNetId && teammate.NetId != LocalNetId;
+        NCard? shownNode = handler.CardIntent.GetNodeOrNull<NCard>("%Card");
+        if (mine && _signals.TryGetValue(teammate.NetId, out var current) && current.Card == shownNode && current.Pulse.IsValid()) return;
+        if (_signals.Remove(teammate.NetId, out var old))
+        {
+            old.Pulse.Kill();
+            if (GodotObject.IsInstanceValid(old.Card)) old.Card.CardHighlight.AnimHide();
+        }
+        if (!mine || shownNode is not NCard shown) return;
+        shown.CardHighlight.AnimShow();
+        shown.CardHighlight.Modulate = NCardHighlight.gold;
+        Tween pulse = shown.CreateTween().SetLoops();
+        pulse.TweenProperty(shown.CardHighlight, "modulate:a", 0.35f, 0.5).SetTrans(Tween.TransitionType.Sine);
+        pulse.TweenProperty(shown.CardHighlight, "modulate:a", 1f, 0.5).SetTrans(Tween.TransitionType.Sine);
+        _signals[teammate.NetId] = (shown, pulse);
+        ModLog.Info($"HandViewer: {teammate.NetId} is trying out your {((CardModel)t.Field("_displayedModel").GetValue()).Id.Entry}");
     }
 
     // ---- hv7: hide your own hand ----

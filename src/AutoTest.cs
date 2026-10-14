@@ -427,7 +427,7 @@ public static class AutoTest
         return Check($"mutator finished step {k}", MutatorPlayer.Gold >= _mutatorGold0 + k);
     }
 
-    private const int MutatorSteps = 4;
+    private const int MutatorSteps = 5;
 
     private static async Task Mutator()
     {
@@ -512,6 +512,26 @@ public static class AutoTest
                 await Wait(1.0); // glow tweens
                 Log($"REF2 energy={me.PlayerCombatState!.Energy} {HandViewer.DescribeOwnGlow()}");
                 break;
+            case 5:
+            {
+                // The host is aiming our Beat Into Shape from its Hand Viewer: we see it over the host's head,
+                // glowing (it's ours); then we play it out from under the host's aim.
+                CardModel? tried = hand.Cards.FirstOrDefault(c => c is BeatIntoShape);
+                var tracker = RunManager.Instance.HoveredModelTracker;
+                await WaitUntil(() => tried != null && tracker.GetHoveredModel(Host.NetId) == tried, 5);
+                Check("you see the card the host is trying out, over their head", tried != null && tracker.GetHoveredModel(Host.NetId) == tried,
+                    $"{tracker.GetHoveredModel(Host.NetId)?.Id.Entry ?? "nothing"}");
+                await WaitUntil(() => HandViewer.SignalGlowing(Host.NetId), 2);
+                Check("...pulsing gold: it's yours", HandViewer.SignalGlowing(Host.NetId));
+                if (tried == null) break;
+                Send(me, "energy 3");
+                await WaitUntil(() => me.PlayerCombatState!.Energy >= 1, 5);
+                RunManager.Instance.ActionQueueSynchronizer.RequestEnqueue(new PlayCardAction(tried, FirstEnemy));
+                await WaitUntil(() => !hand.Cards.Contains(tried), 10);
+                await WaitUntil(() => tracker.GetHoveredModel(Host.NetId) != tried, 5);
+                Check("...and gone once you play it", tracker.GetHoveredModel(Host.NetId) != tried && !HandViewer.SignalGlowing(Host.NetId));
+                break;
+            }
         }
     }
 
@@ -886,6 +906,26 @@ public static class AutoTest
         {
             await Wait(1.0);
             Log($"VIEW2 energy={mutator.PlayerCombatState!.Energy} {HandViewer.DescribeTeammateGlow()}");
+        }
+
+        // ---- Trying out one of their cards: they see it over your head; they play it while you aim ----
+        int trying = HandViewer.IndexOf(c => c is BeatIntoShape);
+        if (Check("Beat Into Shape still in their hand", trying >= 0))
+        {
+            Vector2 from = Peek(trying), to = NCombatRoom.Instance!.GetCreatureNode(FirstEnemy)!.Hitbox.GetGlobalRect().GetCenter();
+            await Mouse(from, null);
+            await Mouse(from, true);
+            for (int i = 1; i <= 6; i++) await Mouse(from.Lerp(to, i / 6f), null);
+            await Wait(0.3);
+            Check("aiming one of their cards", HandViewer.IsAiming, HandViewer.DescribeDragCard());
+            await Ask(5);
+            await Wait(0.5);
+            Check("they play the card you're aiming: your aim ends cleanly", !HandViewer.IsDragging && !HandViewer.IsAiming
+                && !NTargetManager.Instance.IsInSelection && !PileType.Hand.GetPile(mutator).Cards.Any(c => c is BeatIntoShape),
+                $"dragging={HandViewer.IsDragging} aiming={HandViewer.IsAiming} selection={NTargetManager.Instance.IsInSelection}");
+            await Mouse(to, false);
+            await Mouse(away, null);
+            await Wait(0.3);
         }
 
         // ---- Hotkey regressions ----

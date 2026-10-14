@@ -75,6 +75,10 @@ public static partial class HandViewer
 
     internal static bool IsDragging => _drag != null;
 
+    /// <summary>Whether the card over this teammate's head is glowing (it's yours) (auto-test).</summary>
+    internal static bool SignalGlowing(ulong netId) =>
+        _signals.TryGetValue(netId, out var s) && GodotObject.IsInstanceValid(s.Card) && s.Pulse.IsRunning();
+
     internal static bool IsAiming => _targeting;
 
     /// <summary>Teammate cards shown, in hand order: model, the cost label drawn on the card, its glow (auto-test).</summary>
