@@ -1,4 +1,5 @@
 using System;
+using MegaCrit.Sts2.Core.Localization;
 using MegaCrit.Sts2.Core.Localization.DynamicVars;
 using MegaCrit.Sts2.Core.Models.Enchantments;
 using MegaCrit.Sts2.Core.Models.Relics;
@@ -385,7 +386,7 @@ public static class AutoTest
         await WaitUntil(() => CombatManager.Instance.IsInProgress && NPlayerHand.Instance != null, 60);
         if (!Check("combat started", CombatManager.Instance.IsInProgress && NPlayerHand.Instance != null))
         {
-            Log($"RESULT suite={Suite} pass={_pass} fail={_fail} time={clock.Elapsed.TotalSeconds:0.0}s");
+            Log($"RESULT suite={Suite} pass={_pass} fail={_fail} time={clock.Elapsed.TotalSeconds:0.0}s window={DisplayServer.WindowGetSize().X}x{DisplayServer.WindowGetSize().Y}");
             Log("done");
             return;
         }
@@ -403,7 +404,7 @@ public static class AutoTest
         {
             Check("no exception", false, ex.ToString().Replace('\n', ' '));
         }
-        Log($"RESULT suite={Suite} pass={_pass} fail={_fail} time={clock.Elapsed.TotalSeconds:0.0}s");
+        Log($"RESULT suite={Suite} pass={_pass} fail={_fail} time={clock.Elapsed.TotalSeconds:0.0}s window={DisplayServer.WindowGetSize().X}x{DisplayServer.WindowGetSize().Y}");
         Log("done");
     }
 
@@ -533,10 +534,15 @@ public static class AutoTest
         Check("a Pile Viewer for every teammate", teammates.All(t => PileViewer.StripCounts(t.player.NetId) != null), PileViewer.DescribeState());
         if (PileViewer.StripAndRow(MutatorId) is { } placed)
         {
-            Check("Pile Viewer sits next to the teammate's name", placed.Strip.Position.X >= placed.Row.End.X
-                && Mathf.Abs(placed.Strip.GetCenter().Y - placed.Row.GetCenter().Y) < 12f && placed.Strip.Position.X - placed.Row.End.X < 20f
-                && placed.Strip.Size.Y <= placed.Row.Size.Y,
-                $"strip {placed.Strip}, row {placed.Row}");
+            foreach (var (_, other) in teammates)
+            {
+                if (PileViewer.StripAndRow(other.NetId) is not { } p) continue;
+                float expectedX = PileViewer.ExpectedFixedX(other.NetId);
+                Check($"P{other.NetId}'s Pile Viewer at its default spot (cap or after the name)", p.Strip.Position.X >= p.Row.End.X
+                    && Mathf.Abs(p.Strip.Position.X - expectedX) < 1.5f && Mathf.Abs(p.Strip.GetCenter().Y - p.Row.GetCenter().Y) < 12f
+                    && p.Strip.Size.Y <= p.Row.Size.Y,
+                    $"Pile Viewer {p.Strip}, name block {p.Row}, cap {PileViewer.FixedOriginCap():0}, expected x {expectedX:0}");
+            }
             await Mouse(placed.Strip.GetCenter(), null);
             await Wait(0.1);
             Check("hovering a Pile Viewer lights that teammate's frame", PileViewer.RowHighlighted(MutatorId));
@@ -546,9 +552,9 @@ public static class AutoTest
             if (PileViewer.StripAndRow(MutatorId) is { } grown)
             {
                 float bar = PileViewer.HealthBarEnd(MutatorId);
-                Check("a longer health bar (more max HP) moves the Pile Viewer right", mutator.Creature.MaxHp >= 110
-                    && grown.Strip.Position.X > bar && grown.Strip.Position.X - bar < 30f,
-                    $"max HP {mutator.Creature.MaxHp}, health bar ends {bar:0}, Pile Viewer starts {grown.Strip.Position.X:0}");
+                Check("a longer health bar (more max HP) pushes the Pile Viewer right of the cap", mutator.Creature.MaxHp >= 110
+                    && grown.Strip.Position.X > bar && grown.Strip.Position.X - bar < 30f && grown.Strip.Position.X > PileViewer.FixedOriginCap() + 1f,
+                    $"max HP {mutator.Creature.MaxHp}, health bar ends {bar:0}, cap {PileViewer.FixedOriginCap():0}, Pile Viewer starts {grown.Strip.Position.X:0}");
             }
             await Mouse(new Vector2(960f, 300f), null);
             await Wait(0.1);
@@ -566,6 +572,12 @@ public static class AutoTest
         PileViewer.SimulatePress(PileViewer.StripIndexOf(mutator.NetId), PileType.Draw);
         await WaitUntil(() => NCapstoneContainer.Instance?.InUse != true, 3);
         Check("clicking it again closes it", NCapstoneContainer.Instance?.InUse != true);
+        // Empty piles: the game's bubble ("My Discard pile is empty.") names the teammate instead.
+        string owner = mutator.Character.Title.GetFormattedText();
+        string[] bubbles = new[] { "OPEN_EMPTY_DRAW", "OPEN_EMPTY_DISCARD" }.Select(k =>
+            PileViewer.PersonalizeBubble(new LocString("combat_messages", k).GetFormattedText(), owner)).ToArray();
+        Check("empty-pile bubbles name the teammate", bubbles.All(b => b.StartsWith(owner + "'s ") && !b.Contains("My ")),
+            string.Join(" | ", bubbles));
 
         // The game briefly shows a teammate's newly obtained relics beside their name (over the Pile Viewer).
         await WaitUntil(() => !PileViewer.RowAnimating(MutatorId), 10);
@@ -611,10 +623,26 @@ public static class AutoTest
         await Wait(0.1);
         if (PileViewer.StripAndRow(MutatorId) is { } fixedAgain)
         {
-            Check("Fixed alignment: back next to the name", Settings.Alignment == Settings.PileViewerAlignment.Fixed
-                && fixedAgain.Strip.Position.X >= fixedAgain.Row.End.X && fixedAgain.Strip.Position.X - fixedAgain.Row.End.X < 20f,
+            Check("Fixed alignment: back at its default spot", Settings.Alignment == Settings.PileViewerAlignment.Fixed
+                && Mathf.Abs(fixedAgain.Strip.Position.X - PileViewer.ExpectedFixedX(MutatorId)) < 1.5f,
                 $"Pile Viewer {fixedAgain.Strip}, name block {fixedAgain.Row}");
         }
+        // Hand Viewer off: no Hand slot, so the Pile Viewer is back to 3 slots wide.
+        float withHand = PileViewer.StripAndRow(MutatorId)?.Strip.Size.X ?? 0f;
+        SettingsMenu.HandViewerToggle!.ButtonPressed = false;
+        await Wait(0.2);
+        float withoutHand = PileViewer.StripAndRow(MutatorId)?.Strip.Size.X ?? 0f;
+        Check("Hand Viewer off: the Pile Viewer shrinks to 3 slots", withoutHand > 0f && withoutHand < withHand * 0.85f,
+            $"width {withHand:0} → {withoutHand:0}");
+        SettingsMenu.HandViewerToggle.ButtonPressed = true;
+        await Wait(0.2);
+        var (nativeCircle, ourCircle) = PileViewer.BadgeCircles(PileType.Draw);
+        Check("bigger number badges, at most half the icon wide", ourCircle > nativeCircle * 1.1f && ourCircle <= PileViewer.SlotIconWidth / 2f + 0.01f,
+            $"badge circle {nativeCircle:0.#} → {ourCircle:0.#} (icon {PileViewer.SlotIconWidth})");
+        // The panel pads the slots by 4 with a 1-unit border: badge art must end inside the border (-3 .. icon + 3).
+        var artRows = new[] { PileType.Draw, PileType.Hand, PileType.Discard }.Select(PileViewer.BadgeArtRows).ToArray();
+        Check("badges stay inside the Pile Viewer's border", artRows.All(r => r.Top >= -3f && r.Bottom <= PileViewer.SlotIconWidth + 3f),
+            string.Join(", ", artRows.Select(r => $"{r.Top:0.#}..{r.Bottom:0.#}")));
         SettingsMenu.EnabledToggle!.ButtonPressed = false;
         await Wait(0.2);
         Check("Pile Viewer off hides them but keeps the hand", PileViewer.StripCounts(MutatorId) == null && HandViewer.ShownCards().Count > 0);

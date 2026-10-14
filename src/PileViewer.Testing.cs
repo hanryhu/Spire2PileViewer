@@ -53,6 +53,30 @@ public static partial class PileViewer
         _widgets.TryGetValue(netId, out var w) && PlayerRow(w.Player) is { } row
         && row.GetChildren().Any(c => c is MegaCrit.Sts2.Core.Nodes.Relics.NRelic || c.GetType().Name == "NDeckHistoryEntry");
 
+    /// <summary>Where a Fixed Pile Viewer's left edge should be: the cap (+ drag offset) or after the name block (auto-test).</summary>
+    internal static float ExpectedFixedX(ulong netId) =>
+        _widgets.TryGetValue(netId, out var w) && PlayerRow(w.Player) is { } row
+            ? Mathf.Max(FixedOriginCap() + Settings.GetOffset(netId).X, NameBlockRect(row).End.X + RowGap) : float.NaN;
+
+    /// <summary>Visible circle diameter of the game's own badge and of ours for a slot (auto-test).</summary>
+    internal static (float Native, float Ours) BadgeCircles(PileType pileType)
+    {
+        if (NCombatRoom.Instance is not NCombatRoom room) return (float.NaN, float.NaN);
+        return (BadgeCircle(GetBadgeStyle(room, pileType, enlarge: false)), BadgeCircle(GetBadgeStyle(room, pileType)));
+    }
+
+    /// <summary>Top and bottom of a slot's badge art, in slot units (0..SlotSize is the icon) (auto-test).</summary>
+    internal static (float Top, float Bottom) BadgeArtRows(PileType pileType)
+    {
+        if (NCombatRoom.Instance is not NCombatRoom room) return (float.NaN, float.NaN);
+        BadgeStyle style = GetBadgeStyle(room, pileType);
+        if (style.Texture == null) return (style.Position.Y, style.Position.Y + style.Size.Y);
+        var (top, bottom) = BadgeRows(style.Texture);
+        return (style.Position.Y + style.Size.Y * top, style.Position.Y + style.Size.Y * bottom);
+    }
+
+    internal static float SlotIconWidth => SlotSize;
+
     /// <summary>On-screen position of a player's character (auto-test).</summary>
     internal static Vector2? CreatureScreenPos(ulong netId) =>
         _widgets.TryGetValue(netId, out var w) && NCombatRoom.Instance?.GetCreatureNode(w.Player.Creature) is { } c

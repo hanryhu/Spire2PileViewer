@@ -2,7 +2,7 @@
   "title": "Spire2 Pile Viewer",
   "description": "See your teammates' draw, exhaust, and discard piles, and their hand, in co-op.\n\nCosmetic only: teammates don't need the mod.\n\n[list]\n[*] Each teammate gets a Pile Viewer next to their name with live pile counts. [b]Click[/b] a pile to open it. [b]Drag[/b] a Pile Viewer to move it, or set it to float above the characters (F1).\n[*] Your teammate's hand is shown behind yours, with their live costs and playable glow. Hover a card to see it in full; drag it onto an enemy to preview its numbers.\n[*] Click the eye in a Pile Viewer to switch teammates. [b]Hide hand[/b] (or H) hides your own hand to read theirs.\n[*] Hotkeys: Shift+Z / V / C / H for teammate 1's draw / exhaust / discard / hand (Ctrl+ for teammate 2, Ctrl+Shift+ for teammate 3). Rebind to keys or extra mouse buttons.\n[*] [b]F1[/b] for settings.\n[/list]\n\nSource: https://github.com/hanryhu/Spire2PileViewer\nArchitecture adapted from BetterSpire2 by jdr.",
   "visibility": "public",
-  "changeNote": "v0.4.1: New setting 'Pile Viewer alignment': Fixed (next to the names) or Float (above the characters, as before v0.4). Pile Viewers move right when a teammate's health bar grows with max HP. Resizing keeps the left edge in place.",
+  "changeNote": "v0.4.1: New setting 'Pile Viewer alignment': Fixed (next to the names) or Float (above the characters). Fixed Pile Viewers line up in one column next to the names and move right when a long name or a health bar grown with max HP needs the room. Float sits a little lower. Without the Hand Viewer a Pile Viewer is 3 slots wide again. Slightly bigger count badges. Resizing keeps the left edge in place.",
   "tags": [],
   "dependencies": [],
   "contentDescriptors": []
