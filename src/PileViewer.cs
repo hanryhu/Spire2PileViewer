@@ -45,7 +45,7 @@ public static partial class PileViewer
 
     // Relative to the creature node's origin. BetterSpire2's incoming-damage label sits at (10, -320);
     // the strip's bottom-center goes above that.
-    // Float alignment: the default spot above the character (bottom-centre of the Pile Viewer).
+    // Float alignment: the default spot above the character (top-centre of the Pile Viewer).
     private static readonly Vector2 FloatAnchor = new(0f, -350f);
 
     // Gap between a player's name block in the top-left player list and their Pile Viewer.
@@ -274,6 +274,38 @@ public static partial class PileViewer
         return new Rect2(rowRect.Position, new Vector2(right - rowRect.Position.X, rowRect.Size.Y));
     }
 
+    /// <summary>
+    /// Default left edge for Fixed Pile Viewers (screen x): halfway through the 4th relic slot of your relic bar,
+    /// measured from its first slot and spacing (so it doesn't depend on how many relics you have), but not left of a
+    /// starting character's name block plus padding.
+    /// </summary>
+    internal static float FixedOriginCap()
+    {
+        float cap = 0f;
+        var relics = NRun.Instance?.GlobalUi?.RelicInventory;
+        if (relics != null && relics.RelicNodes.Count > 0)
+        {
+            Rect2 first = ScreenRect(relics.RelicNodes[0]);
+            float step = first.Size.X + relics.GetThemeConstant("h_separation") * relics.GetGlobalTransformWithCanvas().Scale.X;
+            cap = first.Position.X + 3.5f * step;
+        }
+        // Never left of where a starting character's name block ends (health bar at 80 max HP, the most any
+        // character starts with, + the game's 6-unit margin) plus padding — otherwise starting rows wouldn't line up.
+        if (PlayerRowAny() is { } row && row.GetNodeOrNull<NHealthBar>("%HealthBar")?.HpBarContainer is Control bar)
+        {
+            Rect2 barRect = ScreenRect(bar);
+            float scale = row.GetGlobalTransformWithCanvas().Scale.X;
+            cap = Mathf.Max(cap, barRect.Position.X + (StartingBarWidth + 6f + RowGap) * scale);
+        }
+        return cap;
+    }
+
+    // Width the game gives a health bar at 80 max HP (UpdateWidthRelativeToReferenceValue(80, 175)).
+    private const float StartingBarWidth = 175f;
+
+    private static NMultiplayerPlayerState? PlayerRowAny() =>
+        NRun.Instance?.GlobalUi?.MultiplayerPlayerContainer?.GetChildren().OfType<NMultiplayerPlayerState>().FirstOrDefault();
+
     /// <summary>A control's rect on screen (it and the player list can be on different canvas layers).</summary>
     internal static Rect2 ScreenRect(Control control)
     {
@@ -302,7 +334,11 @@ public static partial class PileViewer
         {
             if (StripSlots[i] == PileType.Hand && widget.Buttons[i] is Button handButton)
             {
-                handButton.Visible = Settings.HandViewerEnabled;
+                if (handButton.Visible != Settings.HandViewerEnabled)
+                {
+                    handButton.Visible = Settings.HandViewerEnabled;
+                    widget.Root.ResetSize(); // containers don't shrink by themselves
+                }
                 // Highlight the Hand slot whose hand is being shown (on your own strip: while your hand is shown).
                 bool viewing = widget.Player.NetId == (RunManager.Instance?.NetService?.NetId ?? 0)
                     ? !HandViewer.HideOwnHand
@@ -337,15 +373,18 @@ public static partial class PileViewer
         {
             // Float: centred above the character (moves with it), plus the player's drag offset.
             widget.Root.GlobalPosition = creature!.GlobalPosition + FloatAnchor + Settings.GetOffset(widget.Player.NetId)
-                - new Vector2(size.X / 2f, size.Y);
+                - new Vector2(size.X / 2f, 0f);
         }
         else
         {
-            // Fixed: right after the player's name block in the player list (fixed to the UI), plus the drag offset.
-            // Anchored at the centre of its left edge, so resizing keeps that point in place.
+            // Fixed: left edge at the cap (halfway through the 4th relic, so short names still give a left-aligned
+            // column) or right after the player's name block if that's further right (long names, health bars that
+            // grow with max HP). A drag offset moves the cap; the name block still pushes. Anchored at the centre of
+            // its left edge, so resizing keeps that point in place.
             Rect2 block = NameBlockRect(row!);
-            Vector2 onScreen = new Vector2(block.End.X + RowGap, block.GetCenter().Y - size.Y / 2f)
-                + Settings.GetOffset(widget.Player.NetId);
+            Vector2 offset = Settings.GetOffset(widget.Player.NetId);
+            Vector2 onScreen = new Vector2(Mathf.Max(FixedOriginCap() + offset.X, block.End.X + RowGap),
+                block.GetCenter().Y - size.Y / 2f + offset.Y);
             widget.Root.GlobalPosition = widget.Root.GetCanvasTransform().AffineInverse() * onScreen;
         }
 
@@ -725,7 +764,7 @@ public static partial class PileViewer
         return native;
     }
 
-    private readonly record struct BadgeStyle(Texture2D? Texture, Vector2 Position, Vector2 Size, Color Tint,
+    internal readonly record struct BadgeStyle(Texture2D? Texture, Vector2 Position, Vector2 Size, Color Tint,
         Color TextColor, Color OutlineColor, int OutlineSize, int FontSize);
 
     /// <summary>
@@ -734,7 +773,50 @@ public static partial class PileViewer
     /// badge in a corner; exhaust has no badge and centers a purple-outlined number on the icon.
     /// Falls back to a bottom-right badge.
     /// </summary>
-    private static BadgeStyle GetBadgeStyle(NCombatRoom room, PileType pileType)
+    // Badges with a background circle (draw, hand, discard) are drawn this much bigger than the game's, about their
+    // centre, but the visible circle never wider than half the slot's icon.
+    private const float BadgeGrowth = 1.25f;
+
+    private static readonly Dictionary<Texture2D, float> _visibleFraction = new();
+
+    /// <summary>Visible circle diameter of a badge: its texture has a transparent margin around the circle.</summary>
+    internal static float BadgeCircle(BadgeStyle style)
+    {
+        if (style.Texture is not Texture2D tex) return style.Size.X;
+        if (!_visibleFraction.TryGetValue(tex, out float fraction))
+        {
+            // Width of the solid circle across the middle row (alpha >= 0.9), ignoring the soft shadow around it.
+            fraction = 1f;
+            if (tex.GetImage() is Image image && image.GetWidth() > 0)
+            {
+                if (image.IsCompressed()) image.Decompress();
+                int y = image.GetHeight() / 2, first = -1, last = -1;
+                for (int x = 0; x < image.GetWidth(); x++)
+                {
+                    if (image.GetPixel(x, y).A < 0.9f) continue;
+                    if (first < 0) first = x;
+                    last = x;
+                }
+                if (first >= 0) fraction = (last - first + 1) / (float)image.GetWidth();
+            }
+            _visibleFraction[tex] = fraction;
+        }
+        return style.Size.X * fraction;
+    }
+
+    private static BadgeStyle Enlarged(BadgeStyle style)
+    {
+        if (style.Texture == null) return style; // exhaust: a plain number over the icon
+        float circle = BadgeCircle(style);
+        float grow = Mathf.Min(BadgeGrowth, SlotSize / 2f / circle);
+        if (grow <= 1f) return style;
+        Vector2 size = style.Size * grow;
+        Vector2 position = style.Position - (size - style.Size) / 2f;
+        return style with { Position = position, Size = size, FontSize = (int)Math.Round(style.FontSize * grow),
+            OutlineSize = Math.Max(1, (int)Math.Round(style.OutlineSize * grow)) };
+    }
+
+    private static BadgeStyle GetBadgeStyle(NCombatRoom room, PileType pileType, bool enlarge = true)
     {
         const float fallbackSize = 26f;
         var fallback = new BadgeStyle(LoadTexture(BadgeTexturePath),
@@ -762,7 +844,8 @@ public static partial class PileViewer
                 label.GetThemeColor("font_outline_color"),
                 Math.Max(1, (int)Math.Round(label.GetThemeConstant("outline_size") * k)),
                 Math.Max(9, (int)Math.Round(label.GetThemeFontSize("font_size") * k)));
-            if (_loggedBadges.Add(pileType)) ModLog.Info($"PileViewer: {pileType} badge {style} (k={k})");
+            if (enlarge) style = Enlarged(style);
+            if (enlarge && _loggedBadges.Add(pileType)) ModLog.Info($"PileViewer: {pileType} badge {style} (k={k}, circle {BadgeCircle(style):0.#})");
             return style;
         }
         catch (Exception ex)
