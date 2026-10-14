@@ -522,7 +522,14 @@ public static class AutoTest
                 Check("you see the card the host is trying out, over their head", tried != null && tracker.GetHoveredModel(Host.NetId) == tried,
                     $"{tracker.GetHoveredModel(Host.NetId)?.Id.Entry ?? "nothing"}");
                 await WaitUntil(() => HandViewer.SignalGlowing(Host.NetId), 2);
-                Check("...pulsing gold: it's yours", HandViewer.SignalGlowing(Host.NetId));
+                var widths = new List<float>();
+                for (int i = 0; i < 24; i++)
+                {
+                    widths.Add(HandViewer.SignalGlowWidthNow(Host.NetId));
+                    await Wait(0.05);
+                }
+                Check("...blinking gold about once a second: it's yours", HandViewer.SignalGlowing(Host.NetId) && widths.Min() < 0.02f && widths.Max() > 0.06f,
+                    $"glow width {widths.Min():0.###}..{widths.Max():0.###} over 1.2 s");
                 if (tried == null) break;
                 Send(me, "energy 3");
                 await WaitUntil(() => me.PlayerCombatState!.Energy >= 1, 5);

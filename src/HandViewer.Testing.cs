@@ -79,6 +79,11 @@ public static partial class HandViewer
     internal static bool SignalGlowing(ulong netId) =>
         _signals.TryGetValue(netId, out var s) && GodotObject.IsInstanceValid(s.Card) && s.Pulse.IsRunning();
 
+    /// <summary>Current width of that glow (0 = off) (auto-test).</summary>
+    internal static float SignalGlowWidthNow(ulong netId) =>
+        _signals.TryGetValue(netId, out var s) && GodotObject.IsInstanceValid(s.Card) && s.Card.CardHighlight.Material is ShaderMaterial m
+            ? m.GetShaderParameter("width").AsSingle() : float.NaN;
+
     internal static bool IsAiming => _targeting;
 
     /// <summary>Teammate cards shown, in hand order: model, the cost label drawn on the card, its glow (auto-test).</summary>

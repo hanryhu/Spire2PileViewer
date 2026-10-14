@@ -878,6 +878,8 @@ public static partial class HandViewer
     /// <summary>Card over a teammate's head (the game's multiplayer intent) that is glowing because it's yours, by teammate.</summary>
     private static readonly Dictionary<ulong, (NCard Card, Tween Pulse)> _signals = new();
 
+    private const float SignalGlowWidth = 0.1f;
+
     /// <summary>
     /// The game shows the card a teammate hovers or drags over their head. When it's one of *your* cards (they're
     /// trying it out from their Hand Viewer — a hint to play it), it pulses with a gold glow. Called after the game
@@ -896,11 +898,15 @@ public static partial class HandViewer
             if (GodotObject.IsInstanceValid(old.Card)) old.Card.CardHighlight.AnimHide();
         }
         if (!mine || shownNode is not NCard shown) return;
-        shown.CardHighlight.AnimShow();
-        shown.CardHighlight.Modulate = NCardHighlight.gold;
+        // Blink about once a second: the glow's width (what NCardHighlight.AnimShow animates to 0.075) from none
+        // to a little wider than usual and back, so it catches the eye.
+        NCardHighlight glow = shown.CardHighlight;
+        glow.Modulate = NCardHighlight.gold;
+        if (glow.Material is not ShaderMaterial material) return;
+        void SetWidth(float w) => material.SetShaderParameter("width", w);
         Tween pulse = shown.CreateTween().SetLoops();
-        pulse.TweenProperty(shown.CardHighlight, "modulate:a", 0.35f, 0.5).SetTrans(Tween.TransitionType.Sine);
-        pulse.TweenProperty(shown.CardHighlight, "modulate:a", 1f, 0.5).SetTrans(Tween.TransitionType.Sine);
+        pulse.TweenMethod(Callable.From<float>(SetWidth), 0f, SignalGlowWidth, 0.5).SetTrans(Tween.TransitionType.Sine);
+        pulse.TweenMethod(Callable.From<float>(SetWidth), SignalGlowWidth, 0f, 0.5).SetTrans(Tween.TransitionType.Sine);
         _signals[teammate.NetId] = (shown, pulse);
         ModLog.Info($"HandViewer: {teammate.NetId} is trying out your {((CardModel)t.Field("_displayedModel").GetValue()).Id.Entry}");
     }
