@@ -318,6 +318,23 @@ public static partial class HandViewer
     /// <summary>Shown hands, bottom (least recently clicked, drawn in front) first.</summary>
     private static readonly List<ShownHand> _hands = new();
 
+    /// <summary>Teammate card we told the game we're hovering (shown to others over your head), or null.</summary>
+    private static CardModel? _syncedHover;
+
+    /// <summary>
+    /// Like hovering your own card: once a teammate card's closeup shows (not during the hover delay), the game shows
+    /// it to the others over your head.
+    /// </summary>
+    private static void SyncHover(CardModel? model)
+    {
+        if (model == _syncedHover) return;
+        var tracker = RunManager.Instance?.HoveredModelTracker;
+        if (tracker == null) return;
+        if (model != null) tracker.OnLocalCardHovered(model);
+        else tracker.OnLocalCardUnhovered();
+        _syncedHover = model;
+    }
+
     /// <summary>Owner of the teammate card under the mouse or being dragged, or null.</summary>
     internal static ulong? HoveredOwnerNetId
     {
@@ -395,6 +412,7 @@ public static partial class HandViewer
         if (!show)
         {
             foreach (ShownHand h in _hands) h.Layer.Visible = false;
+            SyncHover(null);
             return;
         }
 
@@ -412,6 +430,7 @@ public static partial class HandViewer
         NHandCardHolder? closeup = CloseupHolder(now);
         _lastCloseup = closeup;
         HoldBackHoverEffects(closeup);
+        SyncHover(closeup != null && closeup != _drag ? closeup.CardNode?.Model : null);
         // 0 → untinted, 1 → dark like a heavy shadow; a separate (lighter by default) amount while your hand is hidden.
         float shade = 1f - 0.6f * (HideOwnHand ? Settings.HandShadowWhenHidden : Settings.HandShadow);
         // The game only refreshes card nodes it can find (NCard.FindOnTable) and holders inside its own hand
@@ -865,6 +884,7 @@ public static partial class HandViewer
 
     private static void ClearCards()
     {
+        SyncHover(null);
         EndDrag(attempted: false);
         _pressed = null;
         _clicked = null;

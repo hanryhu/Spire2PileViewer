@@ -427,7 +427,21 @@ public static class AutoTest
         return Check($"mutator finished step {k}", MutatorPlayer.Gold >= _mutatorGold0 + k);
     }
 
-    private const int MutatorSteps = 5;
+    private const int MutatorSteps = 8;
+
+    // Mutator, steps 6-7: what the host showed over their head while we watched.
+    private static bool _watchHostHover;
+
+    private static readonly List<string> _hostHoverSeen = new();
+
+    private static async Task WatchHostHover()
+    {
+        while (_watchHostHover)
+        {
+            if (RunManager.Instance.HoveredModelTracker.GetHoveredModel(Host.NetId) is AbstractModel m) _hostHoverSeen.Add(m.Id.Entry);
+            await Wait(0.03);
+        }
+    }
 
     private static async Task Mutator()
     {
@@ -537,6 +551,25 @@ public static class AutoTest
                 await WaitUntil(() => !hand.Cards.Contains(tried), 10);
                 await WaitUntil(() => tracker.GetHoveredModel(Host.NetId) != tried, 5);
                 Check("...and gone once you play it", tracker.GetHoveredModel(Host.NetId) != tried && !HandViewer.SignalGlowing(Host.NetId));
+                break;
+            }
+            case 6:
+                // Start watching what's over the host's head (they hover one of our cards within its hover delay).
+                _hostHoverSeen.Clear();
+                _watchHostHover = true;
+                _ = TaskHelper.RunSafely(WatchHostHover());
+                break;
+            case 7:
+                _watchHostHover = false;
+                Check("nothing over the host's head while their hover delay runs", _hostHoverSeen.Count == 0,
+                    _hostHoverSeen.Count == 0 ? "nothing seen" : string.Join(",", _hostHoverSeen.Distinct()));
+                break;
+            case 8:
+            {
+                var tracker = RunManager.Instance.HoveredModelTracker;
+                await WaitUntil(() => tracker.GetHoveredModel(Host.NetId) is CardModel c && c.Owner == me, 3);
+                Check("once their closeup shows, you see your card over the host's head",
+                    tracker.GetHoveredModel(Host.NetId) is CardModel shown && shown.Owner == me, $"{tracker.GetHoveredModel(Host.NetId)?.Id.Entry ?? "nothing"}");
                 break;
             }
         }
@@ -932,6 +965,29 @@ public static class AutoTest
                 $"dragging={HandViewer.IsDragging} aiming={HandViewer.IsAiming} selection={NTargetManager.Instance.IsInSelection}");
             await Mouse(to, false);
             await Mouse(away, null);
+            await Wait(0.3);
+        }
+
+        // ---- Hover delay: nothing goes over your head until the closeup shows (they watch the whole time) ----
+        if (await Ask(6))
+        {
+            Settings.HoverDelay = 0.9f;
+            int middle = HandViewer.MiddleIndexOf(_ => true);
+            await Mouse(Peek(middle), null);
+            await Wait(0.5); // well inside the 0.9 s delay
+            bool waiting = HandViewer.HoveredId != null && HandViewer.CloseupId == null;
+            string hover = HandViewer.DescribeHover();
+            await Mouse(away, null);
+            await Wait(0.3);
+            Check("hovered within the delay: no closeup yet", waiting, hover);
+            await Ask(7);
+            Settings.HoverDelay = 0f;
+            await Mouse(Peek(middle), null);
+            await Wait(0.2);
+            Check("instant hover: closeup shows", HandViewer.CloseupId != null, HandViewer.DescribeHover());
+            await Ask(8);
+            await Mouse(away, null);
+            Settings.HoverDelay = 0.1f;
             await Wait(0.3);
         }
 
