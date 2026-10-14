@@ -692,12 +692,21 @@ public static partial class PileViewer
         }
     }
 
+    /// <summary>
+    /// The native empty-pile bubbles speak as the pile's owner ("My Discard pile is empty."); over a teammate, name
+    /// them instead ("The Defect's Discard pile is empty."). English wording only, like <see cref="PersonalizeCaption"/>.
+    /// </summary>
+    internal static string PersonalizeBubble(string text, string owner) =>
+        Regex.Replace(text, @"\b[Mm]y\b", owner + "'s");
+
     private static void ShowEmptyBubble(Player player, PileType pileType)
     {
+        string owner = player.Character.Title.GetFormattedText();
         string key = pileType == PileType.Draw ? "OPEN_EMPTY_DRAW" : "OPEN_EMPTY_DISCARD";
         string message = pileType == PileType.Exhaust && !LocString.Exists("combat_messages", "OPEN_EMPTY_EXHAUST")
-            ? "No exhausted cards."
-            : new LocString("combat_messages", pileType == PileType.Exhaust ? "OPEN_EMPTY_EXHAUST" : key).GetFormattedText();
+            ? $"{owner}'s Exhaust pile is empty."
+            : PersonalizeBubble(new LocString("combat_messages", pileType == PileType.Exhaust ? "OPEN_EMPTY_EXHAUST" : key).GetFormattedText(), owner);
+        ModLog.Info($"PileViewer: empty {pileType} bubble '{message}'");
         var bubble = NThoughtBubbleVfx.Create(message, player.Creature, 2.0);
         NCombatRoom.Instance?.CombatVfxContainer.AddChildSafely(bubble);
     }
@@ -776,8 +785,8 @@ public static partial class PileViewer
     /// badge in a corner; exhaust has no badge and centers a purple-outlined number on the icon.
     /// Falls back to a bottom-right badge.
     /// </summary>
-    // Badges with a background circle (draw, hand, discard) are drawn this much bigger than the game's, about their
-    // centre, but the visible circle never wider than half the slot's icon.
+    // Badges with a background circle (draw, hand, discard) are drawn this much bigger than the game's, growing toward
+    // the icon's centre, but the visible circle never wider than half the slot's icon.
     private const float BadgeGrowth = 1.25f;
 
     private static readonly Dictionary<Texture2D, float> _visibleFraction = new();
@@ -807,14 +816,45 @@ public static partial class PileViewer
         return style.Size.X * fraction;
     }
 
+    private static readonly Dictionary<Texture2D, (float Top, float Bottom)> _visibleRows = new();
+
+    /// <summary>
+    /// Where a badge's visible art (circle, rim and the darker part of its shadow) starts and ends down the middle
+    /// column, as fractions of the texture height.
+    /// </summary>
+    internal static (float Top, float Bottom) BadgeRows(Texture2D tex)
+    {
+        if (_visibleRows.TryGetValue(tex, out var rows)) return rows;
+        rows = (0f, 1f);
+        if (tex.GetImage() is Image image && image.GetHeight() > 0)
+        {
+            if (image.IsCompressed()) image.Decompress();
+            int x = image.GetWidth() / 2, first = -1, last = -1;
+            for (int y = 0; y < image.GetHeight(); y++)
+            {
+                if (image.GetPixel(x, y).A < 0.25f) continue;
+                if (first < 0) first = y;
+                last = y;
+            }
+            if (first >= 0) rows = (first / (float)image.GetHeight(), (last + 1) / (float)image.GetHeight());
+        }
+        _visibleRows[tex] = rows;
+        return rows;
+    }
+
     private static BadgeStyle Enlarged(BadgeStyle style)
     {
         if (style.Texture == null) return style; // exhaust: a plain number over the icon
         float circle = BadgeCircle(style);
         float grow = Mathf.Min(BadgeGrowth, SlotSize / 2f / circle);
         if (grow <= 1f) return style;
+        // Grow toward the icon's centre: the badge's outer edges (the corner it sits in) stay where the game puts
+        // them, so it doesn't spill over the Pile Viewer's border.
+        Vector2 centre = style.Position + style.Size / 2f;
+        Vector2 anchor = new(centre.X > SlotSize / 2f ? style.Position.X + style.Size.X : style.Position.X,
+            centre.Y > SlotSize / 2f ? style.Position.Y + style.Size.Y : style.Position.Y);
         Vector2 size = style.Size * grow;
-        Vector2 position = style.Position - (size - style.Size) / 2f;
+        Vector2 position = anchor - (anchor - style.Position) * grow;
         return style with { Position = position, Size = size, FontSize = (int)Math.Round(style.FontSize * grow),
             OutlineSize = Math.Max(1, (int)Math.Round(style.OutlineSize * grow)) };
     }

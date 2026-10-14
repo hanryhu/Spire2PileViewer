@@ -65,6 +65,16 @@ public static partial class PileViewer
         return (BadgeCircle(GetBadgeStyle(room, pileType, enlarge: false)), BadgeCircle(GetBadgeStyle(room, pileType)));
     }
 
+    /// <summary>Top and bottom of a slot's badge art, in slot units (0..SlotSize is the icon) (auto-test).</summary>
+    internal static (float Top, float Bottom) BadgeArtRows(PileType pileType)
+    {
+        if (NCombatRoom.Instance is not NCombatRoom room) return (float.NaN, float.NaN);
+        BadgeStyle style = GetBadgeStyle(room, pileType);
+        if (style.Texture == null) return (style.Position.Y, style.Position.Y + style.Size.Y);
+        var (top, bottom) = BadgeRows(style.Texture);
+        return (style.Position.Y + style.Size.Y * top, style.Position.Y + style.Size.Y * bottom);
+    }
+
     internal static float SlotIconWidth => SlotSize;
 
     /// <summary>On-screen position of a player's character (auto-test).</summary>

@@ -1,4 +1,5 @@
 using System;
+using MegaCrit.Sts2.Core.Localization;
 using MegaCrit.Sts2.Core.Localization.DynamicVars;
 using MegaCrit.Sts2.Core.Models.Enchantments;
 using MegaCrit.Sts2.Core.Models.Relics;
@@ -571,6 +572,12 @@ public static class AutoTest
         PileViewer.SimulatePress(PileViewer.StripIndexOf(mutator.NetId), PileType.Draw);
         await WaitUntil(() => NCapstoneContainer.Instance?.InUse != true, 3);
         Check("clicking it again closes it", NCapstoneContainer.Instance?.InUse != true);
+        // Empty piles: the game's bubble ("My Discard pile is empty.") names the teammate instead.
+        string owner = mutator.Character.Title.GetFormattedText();
+        string[] bubbles = new[] { "OPEN_EMPTY_DRAW", "OPEN_EMPTY_DISCARD" }.Select(k =>
+            PileViewer.PersonalizeBubble(new LocString("combat_messages", k).GetFormattedText(), owner)).ToArray();
+        Check("empty-pile bubbles name the teammate", bubbles.All(b => b.StartsWith(owner + "'s ") && !b.Contains("My ")),
+            string.Join(" | ", bubbles));
 
         // The game briefly shows a teammate's newly obtained relics beside their name (over the Pile Viewer).
         await WaitUntil(() => !PileViewer.RowAnimating(MutatorId), 10);
@@ -632,6 +639,10 @@ public static class AutoTest
         var (nativeCircle, ourCircle) = PileViewer.BadgeCircles(PileType.Draw);
         Check("bigger number badges, at most half the icon wide", ourCircle > nativeCircle * 1.1f && ourCircle <= PileViewer.SlotIconWidth / 2f + 0.01f,
             $"badge circle {nativeCircle:0.#} → {ourCircle:0.#} (icon {PileViewer.SlotIconWidth})");
+        // The panel pads the slots by 4 with a 1-unit border: badge art must end inside the border (-3 .. icon + 3).
+        var artRows = new[] { PileType.Draw, PileType.Hand, PileType.Discard }.Select(PileViewer.BadgeArtRows).ToArray();
+        Check("badges stay inside the Pile Viewer's border", artRows.All(r => r.Top >= -3f && r.Bottom <= PileViewer.SlotIconWidth + 3f),
+            string.Join(", ", artRows.Select(r => $"{r.Top:0.#}..{r.Bottom:0.#}")));
         SettingsMenu.EnabledToggle!.ButtonPressed = false;
         await Wait(0.2);
         Check("Pile Viewer off hides them but keeps the hand", PileViewer.StripCounts(MutatorId) == null && HandViewer.ShownCards().Count > 0);
