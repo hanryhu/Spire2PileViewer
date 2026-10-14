@@ -72,13 +72,25 @@ public static partial class PileViewer
 
     /// <summary>
     /// A relic, potion or card a player gains or loses flies in or out beside their name (NMultiplayerPlayerState
-    /// adds it to the row for the animation); keep it above the Pile Viewer instead of hidden behind it.
+    /// adds it to the row for the animation); keep it above the Pile Viewer instead of hidden behind it, and let
+    /// clicks through to the Pile Viewer underneath while it plays.
     /// </summary>
     private static void RaiseRowAnimations(Control row)
     {
         foreach (Node child in row.GetChildren())
         {
-            if (child is Control c && c.ZIndex != AboveStripZ && IsRowAnimation(c)) c.ZIndex = AboveStripZ;
+            if (child is not Control c || c.ZIndex == AboveStripZ || !IsRowAnimation(c)) continue;
+            c.ZIndex = AboveStripZ;
+            IgnoreMouse(c);
+        }
+    }
+
+    private static void IgnoreMouse(Control control)
+    {
+        control.MouseFilter = Control.MouseFilterEnum.Ignore;
+        foreach (Node child in control.GetChildren())
+        {
+            if (child is Control c) IgnoreMouse(c);
         }
     }
 

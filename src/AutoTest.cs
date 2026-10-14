@@ -399,7 +399,7 @@ public static class AutoTest
         }
         // Wait for the opening hand to be dealt and settle.
         await WaitUntil(() => NPlayerHand.Instance!.ActiveHolders.Count > 0 && NPlayerHand.Instance.ActiveHolders.Count == PileType.Hand.GetPile(Me).Cards.Count, 15);
-        await Wait(0.8);
+        await Wait(0.3);
         Log($"suite {Suite}: combat ready after {clock.Elapsed.TotalSeconds:0.0}s in this phase");
         try
         {
@@ -692,8 +692,9 @@ public static class AutoTest
         Check("empty-pile bubbles name the teammate", bubbles.All(b => b.StartsWith(owner + "'s ") && !b.Contains("My ")),
             string.Join(" | ", bubbles));
 
-        // The game briefly shows a teammate's newly obtained relics beside their name (over the Pile Viewer).
-        await WaitUntil(() => !PileViewer.RowAnimating(MutatorId), 10);
+        // The game briefly shows a teammate's newly obtained relics beside their name, over the Pile Viewer; they
+        // let the mouse through, so this works while they play.
+        bool animating = PileViewer.RowAnimating(MutatorId);
         if (PileViewer.SlotRect(MutatorId, PileType.Discard) is Rect2 slot)
         {
             Vector2 start = slot.GetCenter();
@@ -706,7 +707,8 @@ public static class AutoTest
             await Mouse(start + new Vector2(60f, -40f), false);
             await Wait(0.2);
             Check("dragging a Pile Viewer moves it and opens nothing",
-                Settings.GetOffset(MutatorId).Length() > 50f && NCapstoneContainer.Instance?.InUse != true, $"offset {Settings.GetOffset(MutatorId)}; {hit}");
+                Settings.GetOffset(MutatorId).Length() > 50f && NCapstoneContainer.Instance?.InUse != true,
+                $"offset {Settings.GetOffset(MutatorId)}; {hit}; relic animation playing: {animating}");
         }
 
         // ---- F1 menu ----
@@ -839,13 +841,13 @@ public static class AutoTest
 
         // ---- Hover delay, closeup ----
         Vector2 Peek(int i) => HandViewer.PeekPoint(i)!.Value;
-        Settings.HoverDelay = 0.4f;
+        Settings.HoverDelay = 0.25f;
         await Mouse(away, null);
-        await Wait(0.4);
+        await Wait(0.3);
         await Mouse(Peek(1), null);
-        await Wait(0.1);
+        await Wait(0.05);
         Check("hover waits for the delay", HandViewer.HoveredId != null && HandViewer.CloseupId == null, HandViewer.DescribeHover());
-        await Wait(0.5);
+        await Wait(0.3);
         Check("closeup after the delay", HandViewer.CloseupId != null && HandViewer.CloseupId == HandViewer.HoveredId, HandViewer.DescribeHover());
         Check("hovering a teammate's card lights their frame", PileViewer.RowHighlighted(MutatorId), HandViewer.DescribeHover());
         if (HandViewer.CloseupGeometry() is { } g)
@@ -861,14 +863,14 @@ public static class AutoTest
         await Wait(0.1);
         Check("moving sideways is immediate", HandViewer.CloseupId != null && HandViewer.CloseupId == HandViewer.HoveredId, HandViewer.DescribeHover());
         await Mouse(away, null);
-        await Wait(0.4);
+        await Wait(0.3);
         await Mouse(Peek(3), null);
         await Mouse(Peek(3), true);
         await Mouse(Peek(3), false);
         Check("click skips the delay", HandViewer.CloseupId != null, HandViewer.DescribeHover());
         await Mouse(away, null);
         Settings.HoverDelay = 0.1f;
-        await Wait(0.4);
+        await Wait(0.3);
 
         // ---- Your own card play wins ----
         if (NPlayerHand.Instance!.ActiveHolders.FirstOrDefault() is NHandCardHolder own)
@@ -1328,9 +1330,9 @@ public static class AutoTest
         var down = new InputEventKey { Keycode = key, PhysicalKeycode = key, ShiftPressed = shift, CtrlPressed = ctrl, Pressed = true };
         var up = new InputEventKey { Keycode = key, PhysicalKeycode = key, ShiftPressed = shift, CtrlPressed = ctrl, Pressed = false };
         Input.ParseInputEvent(down);
-        await Wait(0.05);
+        await Wait(0.03);
         Input.ParseInputEvent(up);
-        await Wait(0.15);
+        await Wait(0.1);
     }
 
     /// <summary>Real mouse event at a viewport position (converted to window pixels): press/release, or motion if null.</summary>
@@ -1343,7 +1345,7 @@ public static class AutoTest
                 ButtonMask = p ? MouseButtonMask.Left : 0 }
             : new InputEventMouseMotion { Position = point, GlobalPosition = point, ButtonMask = MouseButtonMask.Left };
         Input.ParseInputEvent(ev);
-        await Wait(0.05);
+        await Wait(0.035); // ~2 frames: the game handles it on the next frame
     }
 
     private static async Task WaitUntil(Func<bool> condition, double timeoutSeconds)

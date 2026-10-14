@@ -33,7 +33,7 @@ if (-not $?) { exit 1 }
 $hostArgs = @('-fastmp', 'host_standard') + $ExtraArgs
 if ($VanillaSide -eq 'host') { $hostArgs += '-nomods' }
 Start-Game $hostArgs 'host'
-Start-Sleep -Seconds 3
+Start-Sleep -Milliseconds 500 # clients take ~2 s to boot before joining, by when the host listens
 for ($i = 0; $i -lt $Players - 1; $i++) {
     $clientArgs = @('-fastmp', 'join', '-clientId', (1000 + $i)) + $ExtraArgs
     if ($VanillaSide -eq 'client' -and $i -eq 0) { $clientArgs += '-nomods' }
