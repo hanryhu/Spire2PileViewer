@@ -11,7 +11,9 @@ using MegaCrit.Sts2.Core.Entities.Players;
 using MegaCrit.Sts2.Core.Helpers;
 using MegaCrit.Sts2.Core.Localization;
 using MegaCrit.Sts2.Core.Models;
+using MegaCrit.Sts2.Core.Nodes;
 using MegaCrit.Sts2.Core.Nodes.Combat;
+using MegaCrit.Sts2.Core.Nodes.Multiplayer;
 using MegaCrit.Sts2.Core.Nodes.Rooms;
 using MegaCrit.Sts2.Core.Nodes.Screens;
 using MegaCrit.Sts2.Core.Nodes.Screens.Capstones;
@@ -43,7 +45,19 @@ public static partial class PileViewer
 
     // Relative to the creature node's origin. BetterSpire2's incoming-damage label sits at (10, -320);
     // the strip's bottom-center goes above that.
-    private static readonly Vector2 AnchorOffset = new(0f, -350f);
+    // Gap between a player's name block in the top-left player list (its hitbox = the gold frame) and their strip.
+    private const float RowGap = 14f;
+
+    /// <summary>Strip scale at the "Size 100%" setting: about as tall as a player's name + health bar.</summary>
+    internal const float BaseScale = 0.75f;
+
+    private static float StripScale => Settings.Scale * BaseScale;
+
+    /// <summary>Rows whose native hand-count icon we hid (our strip shows the hand count instead).</summary>
+    private static readonly HashSet<NMultiplayerPlayerState> _handCountHidden = new();
+
+    /// <summary>Player whose row is lit because the mouse is over their strip (like hovering their character).</summary>
+    private static Player? _highlighted;
 
     // Launch with -pileviewerself to also show a strip for the local player (handy for solo testing).
     private static readonly bool IncludeSelf = OS.GetCmdlineArgs().Contains("-pileviewerself");
@@ -98,8 +112,58 @@ public static partial class PileViewer
         }
     }
 
+    /// <summary>
+    /// Mouse over a strip lights up that player's frame in the player list (NMultiplayerPlayerStateContainer
+    /// .HighlightPlayer — what hovering their character does), so it's clear whose piles these are.
+    /// </summary>
+    private static void UpdateHoverHighlight()
+    {
+        Vector2 mouse = HandViewer.LastMouse;
+        Player? hovered = _widgets.Values.FirstOrDefault(w => GodotObject.IsInstanceValid(w.Root) && w.Root.IsVisibleInTree()
+            && ScreenRect(w.Root).HasPoint(mouse))?.Player;
+        SetHighlight(hovered);
+    }
+
+    private static void SetHighlight(Player? player)
+    {
+        if (player == _highlighted) return;
+        var container = NRun.Instance?.GlobalUi?.MultiplayerPlayerContainer;
+        if (_highlighted != null) container?.UnhighlightPlayer(_highlighted);
+        _highlighted = player;
+        if (player != null) container?.HighlightPlayer(player);
+    }
+
+    /// <summary>
+    /// Hide the row's native hand-count icon while our strip shows that player's hand size. The game shows it at the
+    /// start of combat and hides it at the end, so it's only put back while combat is still running.
+    /// </summary>
+    private static void HideNativeHandCount(NMultiplayerPlayerState row, bool hide)
+    {
+        if (row.GetNodeOrNull<Control>("%CardCountContainer") is not Control count) return;
+        if (hide)
+        {
+            if (count.Visible) count.Visible = false;
+            _handCountHidden.Add(row);
+        }
+        else if (_handCountHidden.Remove(row) && CombatManager.Instance.IsInProgress)
+        {
+            count.Visible = true;
+        }
+    }
+
+    private static void RestoreNativeHandCounts()
+    {
+        foreach (var row in _handCountHidden.ToList())
+        {
+            if (GodotObject.IsInstanceValid(row)) HideNativeHandCount(row, false);
+        }
+        _handCountHidden.Clear();
+    }
+
     public static void Hide()
     {
+        SetHighlight(null);
+        RestoreNativeHandCounts();
         foreach (var widget in _widgets.Values) widget.Free();
         _widgets.Clear();
         HandViewer.Reset();
@@ -156,6 +220,8 @@ public static partial class PileViewer
         {
             foreach (var widget in _widgets.Values) widget.Free();
             _widgets.Clear();
+            SetHighlight(null);
+            RestoreNativeHandCounts();
             return;
         }
         bool includeSelf = Settings.ShowSelf || IncludeSelf;
@@ -176,15 +242,29 @@ public static partial class PileViewer
             }
             UpdateWidget(room, widget);
         }
+        UpdateHoverHighlight();
+    }
+
+    /// <summary>The player's row in the top-left player list (name, health, ...), which their strip sits next to.</summary>
+    internal static NMultiplayerPlayerState? PlayerRow(Player player) =>
+        NRun.Instance?.GlobalUi?.MultiplayerPlayerContainer?.GetChildren().OfType<NMultiplayerPlayerState>()
+            .FirstOrDefault(row => row.Player == player);
+
+    /// <summary>A control's rect on screen (it and the player list can be on different canvas layers).</summary>
+    internal static Rect2 ScreenRect(Control control)
+    {
+        Transform2D xf = control.GetGlobalTransformWithCanvas();
+        return new Rect2(xf.Origin, control.Size * xf.Scale);
     }
 
     private static void UpdateWidget(NCombatRoom room, Widget widget)
     {
-        NCreature? creatureNode = room.GetCreatureNode(widget.Player.Creature);
+        NMultiplayerPlayerState? row = PlayerRow(widget.Player);
         // Hide under full-screen overlays (pile screens, deck view, map, ...) — the strip would draw on top of them.
         bool overlayOpen = NCapstoneContainer.Instance?.InUse == true;
-        if (creatureNode == null || widget.Player.PlayerCombatState == null || overlayOpen)
+        if (row == null || !row.IsVisibleInTree() || widget.Player.PlayerCombatState == null || overlayOpen)
         {
+            if (row != null) HideNativeHandCount(row, false);
             widget.Root.Visible = false;
             widget.ClosePopup();
             return;
@@ -214,17 +294,24 @@ public static partial class PileViewer
             }
         }
 
+        // The strip's Hand slot shows the hand size, so the row's own hand-count icon is redundant.
+        HideNativeHandCount(row, Settings.HandViewerEnabled);
+
         // Settings from the F1 menu: size and background opacity.
-        if (widget.Root.Scale.X != Settings.Scale) widget.Root.Scale = new Vector2(Settings.Scale, Settings.Scale);
+        if (widget.Root.Scale.X != StripScale) widget.Root.Scale = new Vector2(StripScale, StripScale);
         if (widget.Style.BgColor.A != Settings.Opacity)
         {
             widget.Style.BgColor = new Color(StripBg, Settings.Opacity);
             widget.Style.BorderColor = new Color(StripBorder, Settings.Opacity);
         }
 
-        Vector2 size = widget.Root.Size * Settings.Scale;
-        widget.Root.GlobalPosition = creatureNode.GlobalPosition + AnchorOffset + Settings.GetOffset(widget.Player.NetId)
-            - new Vector2(size.X / 2f, size.Y);
+        // Next to the player's row in the player list (fixed to the UI, unlike the characters, which move), plus
+        // the player's drag offset.
+        Vector2 size = widget.Root.Size * StripScale;
+        Rect2 rowRect = ScreenRect(row.Hitbox);
+        Vector2 onScreen = new Vector2(rowRect.End.X + RowGap, rowRect.Position.Y + (rowRect.Size.Y - size.Y) / 2f)
+            + Settings.GetOffset(widget.Player.NetId);
+        widget.Root.GlobalPosition = widget.Root.GetCanvasTransform().AffineInverse() * onScreen;
 
         if (widget.Popup != null && widget.PopupLabel != null && GodotObject.IsInstanceValid(widget.Popup))
         {

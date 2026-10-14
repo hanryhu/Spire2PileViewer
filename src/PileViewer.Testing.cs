@@ -27,7 +27,23 @@ public static partial class PileViewer
     internal static string[]? StripCounts(ulong netId) =>
         _widgets.TryGetValue(netId, out var w) && GodotObject.IsInstanceValid(w.Root) && w.Root.Visible ? w.Counts.Select(c => c.Text).ToArray() : null;
 
-    internal static Vector2 StripScale(ulong netId) => _widgets.TryGetValue(netId, out var w) ? w.Root.Scale : Vector2.Zero;
+    /// <summary>On-screen rects of a player's strip and their name block (row hitbox = gold frame) in the player list (auto-test).</summary>
+    internal static (Rect2 Strip, Rect2 Row)? StripAndRow(ulong netId)
+    {
+        if (!_widgets.TryGetValue(netId, out var w) || !GodotObject.IsInstanceValid(w.Root) || PlayerRow(w.Player) is not { } row) return null;
+        return (ScreenRect(w.Root), ScreenRect(row.Hitbox));
+    }
+
+    /// <summary>Whether a player's row in the player list is lit (its gold frame) (auto-test).</summary>
+    internal static bool RowHighlighted(ulong netId) =>
+        _widgets.TryGetValue(netId, out var w) && PlayerRow(w.Player) is { } row
+        && Traverse.Create(row).Field<bool>("_isHighlighted").Value;
+
+    /// <summary>Whether the row's native hand-count icon is showing (auto-test).</summary>
+    internal static bool NativeHandCountShown(ulong netId) =>
+        _widgets.TryGetValue(netId, out var w) && PlayerRow(w.Player)?.GetNodeOrNull<Control>("%CardCountContainer") is { } c && c.Visible;
+
+    internal static Vector2 StripScaleOf(ulong netId) => _widgets.TryGetValue(netId, out var w) ? w.Root.Scale : Vector2.Zero;
 
     /// <summary>One-line summary of every strip, for logs and the auto-test.</summary>
     internal static string DescribeState()

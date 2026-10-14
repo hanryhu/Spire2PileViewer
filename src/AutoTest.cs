@@ -82,10 +82,17 @@ public static class AutoTest
             return;
         }
 
+        // Hover a teammate's strip so the shot also shows their lit frame in the player list.
+        if (PileViewer.StripAndRow(PileViewer.Teammates()[0].player.NetId) is { } placed) await Mouse(placed.Strip.GetCenter(), pressed: null);
+        await Wait(0.5);
+        if (PileViewer.PlayerRow(PileViewer.Teammates()[0].player) is { } row) Log("player row tree:\n" + PileViewer.DescribeTree(row, 0));
+        Shot(1);
         Log("SHOT 1");
         await Wait(6.0);
+        await Mouse(new Vector2(960f, 300f), pressed: null);
         SettingsMenu.Open();
         await Wait(1.0);
+        Shot(2);
         Log("SHOT 2");
         await Wait(6.0);
         SettingsMenu.Close();
@@ -99,6 +106,7 @@ public static class AutoTest
         }
         PileViewer.OpenTeammatePile(0, PileType.Discard);
         await Wait(1.5);
+        Shot(3);
         Log("SHOT 3 " + PileViewer.DescribeOpenView());
         await Wait(6.0);
         PileViewer.OpenTeammatePile(0, PileType.Discard); // close it
@@ -107,15 +115,17 @@ public static class AutoTest
         // Hand Viewer: the teammate's hand behind yours with one card raised, then your hand hidden with a closeup.
         HandViewer.View(PileViewer.Teammates()[0].player.NetId);
         await Wait(2.0);
-        if (HandViewer.CardCenter(1) is Vector2 peek) await Mouse(peek - new Vector2(0f, 140f), pressed: null);
+        if (HandViewer.PeekPoint(HandViewer.MiddleIndexOf(_ => true)) is Vector2 peek) await Mouse(peek, pressed: null);
         await Wait(1.5);
+        Shot(4);
         Log("SHOT 4 " + HandViewer.DescribeCloseup());
         await Wait(6.0);
         await Mouse(new Vector2(960f, 300f), pressed: null);
         HandViewer.ToggleHideOwnHand();
         await Wait(1.0);
-        if (HandViewer.CardCenter(2) is Vector2 target) await Mouse(target - new Vector2(0f, 120f), pressed: null);
+        if (HandViewer.CardCenter(HandViewer.MiddleIndexOf(_ => true)) is Vector2 target) await Mouse(target, pressed: null);
         await Wait(1.5);
+        Shot(5);
         Log("SHOT 5 " + HandViewer.DescribeFocus());
         await Wait(6.0);
         HandViewer.ToggleHideOwnHand();
@@ -125,15 +135,16 @@ public static class AutoTest
         // Aim one of their attacks at the enemy: the game's arrow, numbers from their state.
         int attack = HandViewer.MiddleIndexOf(c => c.TargetType == TargetType.AnyEnemy);
         Creature? enemy = CombatManager.Instance.DebugOnlyGetState()?.HittableEnemies.FirstOrDefault();
-        if (attack >= 0 && enemy != null && HandViewer.CardCenter(attack) is Vector2 card)
+        if (attack >= 0 && enemy != null && HandViewer.PeekPoint(attack) is Vector2 card)
         {
-            Vector2 from = card - new Vector2(0f, 155f); // high in the visible strip, clear of your own cards
+            Vector2 from = card;
             Vector2 to = NCombatRoom.Instance!.GetCreatureNode(enemy)!.Hitbox.GetGlobalRect().GetCenter();
             await Mouse(from, pressed: null);
             await Wait(0.8);
             await Mouse(from, pressed: true);
             for (int i = 1; i <= 8; i++) await Mouse(from.Lerp(to, i / 8f), pressed: null);
             await Wait(1.0);
+            Shot(6);
             Log("SHOT 6 " + HandViewer.DescribeDragCard());
             await Wait(6.0);
             await RightClick(to);
@@ -278,6 +289,16 @@ public static class AutoTest
         await Wait(5.0);
         Log($"mixed: still in combat after everything: {CombatManager.Instance.IsInProgress}");
         Log("done");
+    }
+
+    /// <summary>Showcase: the game saves its own frame (no window capture, so window focus doesn't matter).</summary>
+    private static void Shot(int n)
+    {
+        string dir = System.IO.Path.Combine(OS.GetUserDataDir(), "showcase");
+        System.IO.Directory.CreateDirectory(dir);
+        Image image = ((SceneTree)Engine.GetMainLoop()).Root.GetTexture().GetImage();
+        image.SavePng(System.IO.Path.Combine(dir, $"shot_{n}.png"));
+        Log($"saved shot {n} ({image.GetWidth()}x{image.GetHeight()})");
     }
 
     private static async Task RightClick(Vector2 viewportPos)
@@ -505,7 +526,21 @@ public static class AutoTest
         Vector2 away = new(960f, 300f);
 
         // ---- Strips ----
-        Check("a strip over every teammate", teammates.All(t => PileViewer.StripCounts(t.player.NetId) != null), PileViewer.DescribeState());
+        Check("a strip for every teammate", teammates.All(t => PileViewer.StripCounts(t.player.NetId) != null), PileViewer.DescribeState());
+        if (PileViewer.StripAndRow(MutatorId) is { } placed)
+        {
+            Check("strip sits next to the teammate's name", placed.Strip.Position.X >= placed.Row.End.X
+                && Mathf.Abs(placed.Strip.GetCenter().Y - placed.Row.GetCenter().Y) < 12f && placed.Strip.Position.X - placed.Row.End.X < 20f
+                && placed.Strip.Size.Y <= placed.Row.Size.Y,
+                $"strip {placed.Strip}, row {placed.Row}");
+            await Mouse(placed.Strip.GetCenter(), null);
+            await Wait(0.1);
+            Check("hovering a strip lights that teammate's frame", PileViewer.RowHighlighted(MutatorId));
+            Check("the name's own hand-count icon is hidden (the strip shows it)", !PileViewer.NativeHandCountShown(MutatorId));
+            await Mouse(new Vector2(960f, 300f), null);
+            await Wait(0.1);
+            Check("…and it goes out when the mouse leaves", !PileViewer.RowHighlighted(MutatorId));
+        }
         await WaitUntil(() => PileType.Exhaust.GetPile(mutator).Cards.Count > 0, 15);
         await Wait(0.2);
         string expected = string.Join("/", PileViewer.StripSlots.Select(p => p.GetPile(mutator).Cards.Count));
@@ -535,7 +570,7 @@ public static class AutoTest
         SettingsMenu.Open();
         SettingsMenu.ScaleSlider!.Value = 150;
         await Wait(0.1);
-        Check("size slider scales the strips", Mathf.IsEqualApprox(PileViewer.StripScale(MutatorId).X, 1.5f), $"{PileViewer.StripScale(MutatorId)}");
+        Check("size slider scales the strips", Mathf.IsEqualApprox(PileViewer.StripScaleOf(MutatorId).X, 1.5f * PileViewer.BaseScale), $"{PileViewer.StripScaleOf(MutatorId)}");
         SettingsMenu.ScaleSlider.Value = 100;
         SettingsMenu.ResetPositionButton!.EmitSignal(BaseButton.SignalName.Pressed);
         Check("reset strip positions", Settings.GetOffset(MutatorId) == Vector2.Zero);

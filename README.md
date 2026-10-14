@@ -4,9 +4,9 @@ Slay the Spire 2 co-op mod: see your teammates' draw, exhaust, and discard piles
 
 Cosmetic only: teammates don't need the mod, and nothing you do with it is sent to them.
 
-![Strips above each teammate](assets/strips.png)
+![Strips next to each teammate's name](assets/strips.png)
 
-- Each teammate gets a strip with live pile counts. **Click** a pile to open it.
+- Each teammate gets a strip next to their name with live pile counts. **Click** a pile to open it.
 - **Drag** a strip to move it.
 - Hotkeys: Shift+Z / V / C open teammate 1's draw / exhaust / discard pile (Ctrl+ for teammate 2,
   Ctrl+Shift+ for teammate 3). Rebind in F1, to keys or extra mouse buttons. The game's own hotkeys win.
