@@ -447,6 +447,13 @@ public static partial class HandViewer
         for (int k = 0; k < _hands.Count; k++) UpdateHand(_hands[k], viewed[k], k + 1, hand, container, shade, closeup, refresh);
     }
 
+    // How far a closeup's bottom edge stays above the bottom of the screen (layer units).
+    private const float ScreenMargin = 4f;
+
+    /// <summary>The bottom of the screen in a hand layer's coordinates.</summary>
+    private static float ScreenBottom(Control layer) =>
+        (layer.GetGlobalTransformWithCanvas().AffineInverse() * new Vector2(0f, layer.GetViewportRect().Size.Y)).Y;
+
     private static ShownHand CreateHand(ulong netId, Control container)
     {
         var layer = new Control { Name = $"Spire2PileViewer_TeammateHand_{netId}", MouseFilter = Control.MouseFilterEnum.Ignore };
@@ -566,13 +573,17 @@ public static partial class HandViewer
             }
             if (i == focusIndex)
             {
-                // Full size and upright. With your hand hidden: the native closeup. Otherwise lifted so the whole
-                // card shows above your hand instead of covering it — its bottom edge where your hand starts, but
-                // never above the mouse (an edge card hovered low, where your hand doesn't reach, stays under it).
+                // Full size and upright. With nothing of yours to avoid (your hand hidden, or no cards: dead and
+                // spectating, or an empty hand) the front (lowest) hand has nothing over it, so its card stays where
+                // it is (moving it made it jitter under the mouse), only kept on screen; a hand further back is partly
+                // covered by the ones in front, so its card rises like the native closeup. Otherwise lifted so the
+                // whole card shows above your hand instead of covering it — its bottom edge where your hand starts,
+                // but never above the mouse (an edge card hovered low, where your hand doesn't reach, stays under it).
                 float height = holder.Hitbox.Size.Y;
-                if (HideOwnHand)
+                if (HideOwnHand || hand.ActiveHolders.Count == 0)
                 {
-                    position.Y = -height * 0.5f + 2f;
+                    if (level > 1) position.Y = -height * 0.5f + 2f;
+                    position.Y = Mathf.Min(position.Y, ScreenBottom(layer) - height * 0.5f - ScreenMargin);
                 }
                 else
                 {
@@ -617,6 +628,29 @@ public static partial class HandViewer
         _clicked = holder;
         _pressed = holder;
         _pressMouse = LastMouse;
+        SendSelected(holder.CardNode?.Model); // held: its owner sees it blink gold over your head
+    }
+
+    private static bool _sentSelected;
+
+    /// <summary>
+    /// Like pressing your own card: the card you hold (pressed or dragged) is the game's "selected" card, shown to the
+    /// others over your head; its owner (with the mod) sees it blink gold. Null releases it (only if we set it).
+    /// </summary>
+    private static void SendSelected(CardModel? model)
+    {
+        var tracker = RunManager.Instance?.HoveredModelTracker;
+        if (tracker == null) return;
+        if (model != null && Settings.SendsCardSignals)
+        {
+            tracker.OnLocalCardSelected(model);
+            _sentSelected = true;
+        }
+        else if (_sentSelected)
+        {
+            tracker.OnLocalCardDeselected();
+            _sentSelected = false;
+        }
     }
 
     /// <summary>
@@ -708,7 +742,11 @@ public static partial class HandViewer
         bool leftDown = Input.IsMouseButtonPressed(MouseButton.Left);
         if (_pressed != null && _drag == null)
         {
-            if (!GodotObject.IsInstanceValid(_pressed) || !leftDown) _pressed = null;
+            if (!GodotObject.IsInstanceValid(_pressed) || !leftDown)
+            {
+                _pressed = null;
+                SendSelected(null); // let go without dragging
+            }
             else if ((LastMouse - _pressMouse).Length() > CardDragThreshold) StartDrag(_pressed);
         }
         if (_drag == null) return;
@@ -764,7 +802,7 @@ public static partial class HandViewer
         holder.Hitbox.MouseFilter = Control.MouseFilterEnum.Ignore; // like the game: don't block what's under the card
         // Like dragging your own card: the game shows teammates the card over your head (its own sync message, so
         // players without the mod see it too).
-        if (Settings.SendsCardSignals && holder.CardNode?.Model is CardModel model) RunManager.Instance?.HoveredModelTracker?.OnLocalCardSelected(model);
+        SendSelected(holder.CardNode?.Model);
         ModLog.Info($"HandViewer: preview drag {holder.CardNode?.Model?.Id.Entry}");
     }
 
@@ -843,7 +881,7 @@ public static partial class HandViewer
         if (_multiShown && holder.CardNode?.Model is CardModel card) ShowMultiTargeting(card, false);
         _multiShown = false;
         _drag = null;
-        RunManager.Instance?.HoveredModelTracker?.OnLocalCardDeselected();
+        SendSelected(null);
         _clicked = null;
         if (GodotObject.IsInstanceValid(holder))
         {
@@ -913,16 +951,17 @@ public static partial class HandViewer
     private const float SignalGlowWidth = 0.1f;
 
     /// <summary>
-    /// The game shows the card a teammate hovers or drags over their head. When it's one of *your* cards (they're
-    /// trying it out from their Hand Viewer — a hint to play it), it pulses with a gold glow. Called after the game
-    /// updates that intent.
+    /// The game shows the card a teammate hovers or holds over their head. When it's one of *your* cards and they're
+    /// holding it (pressed or dragging it in their Hand Viewer — a hint to play it), it blinks gold; just hovering it
+    /// shows it without the gold. Called after the game updates that intent or their input state (mouse button).
     /// </summary>
     internal static void OnTeammateIntentChanged(NMultiplayerPlayerIntentHandler handler)
     {
         var t = Traverse.Create(handler);
         if (t.Field("_player").GetValue() is not Player teammate) return;
-        bool mine = Settings.ReceivesCardSignals && t.Field("_displayedModel").GetValue() is CardModel card && card.Owner?.NetId == LocalNetId
-            && teammate.NetId != LocalNetId;
+        bool held = RunManager.Instance?.InputSynchronizer?.GetMouseDown(teammate.NetId) == true;
+        bool mine = Settings.ReceivesCardSignals && held && t.Field("_displayedModel").GetValue() is CardModel card
+            && card.Owner?.NetId == LocalNetId && teammate.NetId != LocalNetId;
         NCard? shownNode = handler.CardIntent.GetNodeOrNull<NCard>("%Card");
         if (mine && _signals.TryGetValue(teammate.NetId, out var current) && current.Card == shownNode && current.Pulse.IsValid()) return;
         if (_signals.Remove(teammate.NetId, out var old))
