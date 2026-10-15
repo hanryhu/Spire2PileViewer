@@ -114,6 +114,7 @@ public static partial class HandViewer
     /// </summary>
     public static void Reset()
     {
+        _endTurnIndex = null; // a new combat room has its own button
         if (HideOwnHand) ApplyHiddenLook(false);
         HideOwnHand = false;
         if (_hideButton != null && GodotObject.IsInstanceValid(_hideButton)) _hideButton.QueueFree();
@@ -157,6 +158,34 @@ public static partial class HandViewer
         UpdateText(viewed);
         ApplyHiddenLook(HideOwnHand);
         UpdateCards(viewed);
+        KeepEndTurnOnTop(room, _hands.Count > 0);
+    }
+
+    /// <summary>Where the End Turn button was among its siblings before it was moved above the Hand Viewer, or null.</summary>
+    private static int? _endTurnIndex;
+
+    /// <summary>
+    /// Raised teammate hands (two or three stacked, nearly full) reach the End Turn button, and since the hand comes
+    /// later among the combat UI's children they were drawn over its left part and took its clicks. While any is
+    /// shown, move the button to just after the hand: then it's drawn above the teammate cards *and* gets the clicks
+    /// there (Godot picks controls by tree order, not z-index, so only reordering keeps the two in step). A hovered
+    /// teammate card's closeup is still drawn above it (z-index 1). Moved back when no teammate hand is shown.
+    /// </summary>
+    private static void KeepEndTurnOnTop(NCombatRoom room, bool handsShown)
+    {
+        if (room.Ui?.EndTurnButton is not Control endTurn || !GodotObject.IsInstanceValid(endTurn)
+            || NPlayerHand.Instance is not NPlayerHand hand || endTurn.GetParent() is not Node parent || hand.GetParent() != parent) return;
+        if (handsShown && _endTurnIndex == null)
+        {
+            if (endTurn.GetIndex() > hand.GetIndex()) return; // already above the hand
+            _endTurnIndex = endTurn.GetIndex();
+            parent.MoveChild(endTurn, hand.GetIndex()); // removing it first shifts the hand down: lands right after it
+        }
+        else if (!handsShown && _endTurnIndex is int index)
+        {
+            parent.MoveChild(endTurn, index);
+            _endTurnIndex = null;
+        }
     }
 
     private static void UpdateHideButton(NCombatRoom room)
@@ -596,10 +625,12 @@ public static partial class HandViewer
                     _focusBottom ??= Mathf.Max(handTop, (layer.GetGlobalTransformWithCanvas().AffineInverse() * LastMouse).Y + 4f);
                     position.Y = _focusBottom.Value - height * 0.5f;
                 }
+                bool placed = holder.Scale != Vector2.One || holder.RotationDegrees != 0f || Mathf.Abs(holder.Position.Y - position.Y) > 0.5f;
                 holder.SetAngleInstantly(0f);
                 holder.SetScaleInstantly(Vector2.One);
                 holder.Position = new Vector2(holder.Position.X, position.Y);
                 holder.SetTargetPosition(position);
+                if (placed) RealignTips(holder);
             }
             else
             {
@@ -704,6 +735,20 @@ public static partial class HandViewer
     }
 
     private static NTargetManager? TargetManager => NRun.Instance?.GlobalUi?.TargetManager;
+
+    /// <summary>
+    /// The game lines a card's tooltips up beside it when they appear and then only moves them along with it; the
+    /// closeup is resized and placed afterwards (from its smaller spot in the fan), so line them up again — otherwise
+    /// they end up partly behind the full-size card.
+    /// </summary>
+    private static void RealignTips(NHandCardHolder holder)
+    {
+        if (Traverse.Create(typeof(NHoverTipSet)).Field("_activeHoverTips").GetValue() is Dictionary<Control, NHoverTipSet> tips
+            && tips.TryGetValue(holder, out NHoverTipSet? set) && GodotObject.IsInstanceValid(set))
+        {
+            set.SetAlignmentForCardHolder(holder);
+        }
+    }
 
     /// <summary>While you're playing one of your own cards, teammate cards ignore the mouse (no hover, no drag).</summary>
     private static void BlockWhileYouPlay(NPlayerHand hand)

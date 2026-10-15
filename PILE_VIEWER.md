@@ -50,6 +50,9 @@ and exits non-zero on failure. Every test fight is against WATERFALL_GIANT_BOSS.
   during the delay, card over the host's head without gold, played out from under the host's aim) plus a
   modded third player. Same mod list on every instance, so it doesn't cover handshake/BaseLib behaviour — keep
   real vanilla (`mixed`) for that.
+- `explore` (~2 min; 4 players): odd hands and situations (statuses, curses, X cost, afflictions, upgrades, full and
+  empty hands, generated cards, a card choice, a dead teammate, a multi-enemy fight) — saves game frames
+  (`showcase/shot_1NN.png`) and `EXPLORE`/`SHOTNOTE` notes for looking at; see `docs/EXPLORATION.md`.
 - `mixed -VanillaSide host|client`: one side launched `-nomods`; reach the first fight by playing, then the
   modded side uses every feature on the unmodded teammate.
 

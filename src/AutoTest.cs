@@ -6,6 +6,7 @@ using MegaCrit.Sts2.Core.Models.Relics;
 using MegaCrit.Sts2.Core.Models.Powers;
 using MegaCrit.Sts2.Core.Models.Cards;
 using MegaCrit.Sts2.Core.Models.Encounters;
+using MegaCrit.Sts2.Core.Models.Afflictions;
 using MegaCrit.Sts2.Core.GameActions;
 using MegaCrit.Sts2.Core.Saves;
 using MegaCrit.Sts2.Core.Nodes.Cards.Holders;
@@ -413,7 +414,12 @@ public static class AutoTest
         Log($"suite {Suite}: combat ready after {clock.Elapsed.TotalSeconds:0.0}s in this phase");
         try
         {
-            if (Suite == "harness")
+            if (Suite == "explore")
+            {
+                if (isHost) await ExploreHost();
+                else await ExploreTeammate();
+            }
+            else if (Suite == "harness")
             {
                 if (isHost) await HarnessObserver();
                 else if (Me.NetId == MutatorId) await HarnessTeammate();
@@ -894,6 +900,25 @@ public static class AutoTest
         Settings.HoverDelay = 0.1f;
         await Wait(0.3);
 
+        // ---- A closeup's tooltips sit beside the card, not behind it (hand shown, then hidden) ----
+        foreach (bool handHidden in new[] { false, true })
+        {
+            if (HandViewer.HideOwnHand != handHidden) HandViewer.ToggleHideOwnHand();
+            int tipped = HandViewer.MiddleIndexOf(c => c.HoverTips.Any());
+            if (tipped < 0) break;
+            await Mouse(away, null);
+            await Wait(0.3);
+            await Mouse(Peek(tipped), null);
+            await Wait(0.4);
+            var tips = HandViewer.CloseupTips();
+            bool beside = tips is { } t && (t.Tips.Position.X >= t.Card.End.X - 1f || t.Tips.End.X <= t.Card.Position.X + 1f);
+            Check($"a closeup's tooltips sit beside the card{(handHidden ? " (hand hidden)" : "")}", beside,
+                tips is { } u ? $"card {u.Card}, tips {u.Tips}" : $"no tooltips ({HandViewer.DescribeHover()})");
+        }
+        if (HandViewer.HideOwnHand) HandViewer.ToggleHideOwnHand();
+        await Mouse(away, null);
+        await Wait(0.3);
+
         // ---- Hand hidden: nothing covers the front hand, so its closeup isn't moved up ----
         HandViewer.ToggleHideOwnHand();
         await Mouse(Peek(2), null);
@@ -1005,12 +1030,17 @@ public static class AutoTest
             if (Check("Lift in their hand", lift >= 0))
             {
                 Vector2 from = Peek(lift), to = NCombatRoom.Instance!.GetCreatureNode(me.Creature)!.Hitbox.GetGlobalRect().GetCenter();
+                // Lift is the last card of a full hand: its corner is under the End Turn button (drawn on top), so
+                // press the part of it that shows.
+                Rect2 endTurnRect = NCombatRoom.Instance!.Ui.EndTurnButton.GetGlobalRect();
+                if (endTurnRect.HasPoint(from)) from.X = endTurnRect.Position.X - 30f;
                 await Mouse(from, null);
+                string liftUnder = ((SceneTree)Engine.GetMainLoop()).Root.GuiGetHoveredControl()?.GetPath().ToString() ?? "nothing";
                 await Mouse(from, true);
                 for (int i = 1; i <= 6; i++) await Mouse(from.Lerp(to, i / 6f), null);
                 await Wait(0.3);
                 string aimed = HandViewer.DescribeDragCard();
-                Check("Lift aims at an ally with the game's arrow", HandViewer.IsAiming, aimed);
+                Check("Lift aims at an ally with the game's arrow", HandViewer.IsAiming, $"{aimed}; pressed at {from} on {liftUnder}; End Turn {NCombatRoom.Instance!.Ui.EndTurnButton.GetGlobalRect()}");
                 Check("...lighting the owner's frame and the target's", PileViewer.RowHighlighted(MutatorId) && PileViewer.RowHighlighted(me),
                     $"owner {PileViewer.RowHighlighted(MutatorId)}, target {PileViewer.RowHighlighted(me)}");
                 await RightClick(to);
@@ -1211,6 +1241,18 @@ public static class AutoTest
                 && !PileViewer.RowHighlighted(MutatorId), HandViewer.DescribeHover());
             await Mouse(away, null);
             await Wait(0.3);
+            // Stacked hands reach the End Turn button: it stays on top and takes the mouse across its width.
+            Rect2 endRect = NCombatRoom.Instance!.Ui.EndTurnButton.GetGlobalRect();
+            var hits = new List<string>();
+            foreach (float fx in new[] { 0.1f, 0.5f, 0.9f })
+            {
+                await Mouse(new Vector2(endRect.Position.X + endRect.Size.X * fx, endRect.GetCenter().Y), null);
+                await Wait(0.1);
+                hits.Add(((SceneTree)Engine.GetMainLoop()).Root.GuiGetHoveredControl()?.Name ?? "nothing");
+            }
+            await Mouse(away, null);
+            Check("with hands stacked, the End Turn button takes the mouse across its width", hits.All(h => h == "EndTurnButton"), string.Join(", ", hits));
+            await Wait(0.2);
             // Sliding from one hand's card onto another hand's card starts the hover delay again.
             Settings.HoverDelay = 0.4f;
             await Mouse(HandViewer.PeekPointIn(MutatorId, rightmost: false)!.Value, null);
@@ -1304,6 +1346,315 @@ public static class AutoTest
     /// <summary>A front-hand closeup that stays put, or is only nudged up as far as keeping its bottom on screen.</summary>
     private static bool StaysOnScreen((float Lift, int Level, float AboveScreenBottom)? closeup) =>
         closeup is { Level: 1 } c && c.AboveScreenBottom >= -0.5f && (Mathf.Abs(c.Lift) < 1f || c.AboveScreenBottom < 6f);
+
+    // ---------------- Explore: odd hands and situations, for looking at (screenshots + notes) ----------------
+
+    private const int ExploreSteps = 3;
+
+    private static void Note(string text) => Log("EXPLORE " + text);
+
+    private static int _shot = 100;
+
+    private static async Task Snap(string caption)
+    {
+        await Wait(0.35);
+        Shot(++_shot);
+        Log($"SHOTNOTE {_shot} {caption}");
+    }
+
+    /// <summary>Teammates: 1000 statuses/curses/X cost (then lock-step steps), 1001 full upgraded hand, 1002 afflictions.</summary>
+    private static async Task ExploreTeammate()
+    {
+        Player me = Me;
+        _hostGold0 = Host.Gold;
+        var hand = PileType.Hand.GetPile(me);
+        string Card<T>() where T : CardModel => Id<T>(ModelDb.AllCards);
+        switch (me.NetId)
+        {
+            case 1000:
+                foreach (CardModel c in hand.Cards.ToList()) Send(me, $"remove_card {c.Id.Entry} Hand");
+                await WaitUntil(() => hand.Cards.Count == 0, 5);
+                foreach (string id in new[] { Card<BladeDance>(), Card<Wound>(), Card<Dazed>(), Card<Regret>(), Card<Doubt>(), Card<Skewer>() })
+                    Send(me, "card " + id);
+                foreach (string id in new[] { Card<Regret>(), Card<Wound>(), Card<Shiv>() }) Send(me, $"card {id} Discard");
+                foreach (string id in new[] { Card<Burn>(), Card<Slimed>() }) Send(me, $"card {id} Exhaust");
+                Send(me, "energy 6");
+                break;
+            case 1001:
+                Send(me, "draw 5");
+                await WaitUntil(() => hand.Cards.Count >= 10, 5);
+                for (int i = 0; i < 3; i++) Send(me, $"upgrade {i}");
+                Send(me, "card " + Card<Whirlwind>()); // hand full: where does it go?
+                for (int i = 0; i < 12; i++) Send(me, $"card {Card<StrikeRegent>()} Draw"); // a long draw pile screen
+                break;
+            default:
+                string[] afflictions =
+                {
+                    ModelDb.Affliction<Bound>().Id.Entry, ModelDb.Affliction<Entangled>().Id.Entry, ModelDb.Affliction<Galvanized>().Id.Entry,
+                    ModelDb.Affliction<Hexed>().Id.Entry, ModelDb.Affliction<Ringing>().Id.Entry, ModelDb.Affliction<Smog>().Id.Entry,
+                    ModelDb.Affliction<Tainted>().Id.Entry,
+                };
+                Send(me, "draw 2");
+                await WaitUntil(() => hand.Cards.Count >= 7, 5);
+                for (int i = 0; i < afflictions.Length && i < hand.Cards.Count; i++) Send(me, $"afflict {afflictions[i]} 1 {i}");
+                // The real Entangled: the Tangled debuff (Vine Shambler) entangles your attacks and makes them cost 1 more.
+                Send(me, $"power {Id<TangledPower>(ModelDb.AllPowers)} 1 {CreatureIndex(me.Creature)}");
+                break;
+        }
+        await Wait(2.0);
+        await WaitUntil(() => NPlayerHand.Instance!.ActiveHolders.Count == hand.Cards.Count, 5);
+        await Wait(0.5);
+        string tag = me.NetId switch { 1000 => "REF4", 1001 => "REF5", _ => "REF6" };
+        foreach (string line in HandViewer.DumpOwnHand()) Log($"{tag} {line}");
+        Log($"EXPLORE P{me.NetId} own hand {hand.Cards.Count}: {string.Join(", ", hand.Cards.Select(c => c.Id.Entry))}; discard {PileType.Discard.GetPile(me).Cards.Count}, exhaust {PileType.Exhaust.GetPile(me).Cards.Count}");
+
+        if (me.NetId != MutatorId)
+        {
+            // Wait for the host to finish its steps with 1000, then idle through the second fight.
+            await WaitUntil(() => Host.Gold >= _hostGold0 + ExploreSteps + 1, 200);
+            return;
+        }
+        for (int k = 1; k <= ExploreSteps + 1; k++)
+        {
+            int asked = k == 4 ? k + 1 : k; // the host's 4th gold releases 1001/1002; its 5th asks for the choice
+            Player RunHost() => RunManager.Instance.DebugOnlyGetState()!.Players.First(p => p.NetId == 1); // also between fights
+            await WaitUntil(() => RunHost().Gold >= _hostGold0 + asked, 120);
+            if (RunHost().Gold < _hostGold0 + asked) return;
+            if (k == 4)
+            {
+                // Fight 2: answer first — once the card choice is open, console actions wait behind it.
+                int g = me.Gold;
+                Send(me, "gold 1");
+                await WaitUntil(() => me.Gold > g, 10);
+                Send(me, "energy 3");
+                Send(me, "card " + Card<Survivor>());
+                await WaitUntil(() => hand.Cards.Any(c => c is Survivor), 5);
+                if (hand.Cards.FirstOrDefault(c => c is Survivor) is CardModel sv)
+                {
+                    RunManager.Instance.ActionQueueSynchronizer.RequestEnqueue(new PlayCardAction(sv, null));
+                }
+                await Wait(1.0);
+                Log($"EXPLORE P1000 choosing a card to discard (fight 2); hand: {string.Join(", ", hand.Cards.Select(c => c.Id.Entry))}");
+                await Wait(20.0); // stay in the choice while the host looks
+                return;
+            }
+            switch (k)
+            {
+                case 1: // generated cards mid-turn
+                    if (hand.Cards.FirstOrDefault(c => c is BladeDance) is CardModel bd)
+                    {
+                        RunManager.Instance.ActionQueueSynchronizer.RequestEnqueue(new PlayCardAction(bd, null));
+                        await WaitUntil(() => hand.Cards.Any(c => c is Shiv), 5);
+                    }
+                    Log($"EXPLORE P1000 after Blade Dance: {string.Join(", ", hand.Cards.Select(c => c.Id.Entry))}");
+                    break;
+                case 2: // empty hand
+                    foreach (CardModel c in hand.Cards.ToList()) Send(me, $"remove_card {c.Id.Entry} Hand");
+                    await WaitUntil(() => hand.Cards.Count == 0, 5);
+                    Log($"EXPLORE P1000 hand emptied: {hand.Cards.Count} cards");
+                    break;
+                case 3: // dead teammate
+                    Send(me, "die");
+                    await WaitUntil(() => me.Creature.IsDead, 5);
+                    Log($"EXPLORE P1000 dead: {me.Creature.IsDead}; hand {hand.Cards.Count}");
+                    break;
+            }
+            int gold = me.Gold;
+            Send(me, "gold 1");
+            await WaitUntil(() => me.Gold > gold, 10);
+        }
+    }
+
+    /// <summary>Host: looks at the odd hands through the Pile Viewer and Hand Viewer; screenshots + notes.</summary>
+    private static async Task ExploreHost()
+    {
+        Player me = Me;
+        var teammates = PileViewer.Teammates();
+        Player t0 = teammates.First(t => t.player.NetId == MutatorId).player;
+        _hostGold0 = me.Gold;
+        _mutatorGold0 = t0.Gold;
+        Vector2 away = new(960f, 300f);
+        Settings.HoverDelay = 0.1f;
+        // The teammates' setups land (1000 logs its own hand once its odd cards are in).
+        await WaitUntil(() => PileType.Hand.GetPile(t0).Cards.Any(c => c is Skewer), 15);
+        await Wait(2.5);
+        ulong[] ids = teammates.Select(t => t.player.NetId).ToArray();
+        Vector2 enemy = NCombatRoom.Instance!.GetCreatureNode(FirstEnemy)!.Hitbox.GetGlobalRect().GetCenter();
+
+        async Task Hover(ulong id, Func<CardModel, bool> match, string caption)
+        {
+            if (HandViewer.PeekPointOf(id, match) is not Vector2 at)
+            {
+                Note($"P{id}: no card for '{caption}'");
+                return;
+            }
+            await Mouse(away, null);
+            await Wait(0.2);
+            await Mouse(at, null);
+            await Wait(0.35);
+            Note($"P{id} hover {caption}: {HandViewer.DescribeHover()} | {HandViewer.DescribeFocus()}");
+            await Snap($"P{id} hover: {caption}");
+            await Mouse(away, null);
+            await Wait(0.25);
+        }
+
+        async Task Drag(ulong id, Func<CardModel, bool> match, Vector2 to, string caption)
+        {
+            if (HandViewer.PeekPointOf(id, match) is not Vector2 from)
+            {
+                Note($"P{id}: no card for '{caption}'");
+                return;
+            }
+            int said = PileViewer.SaidCount;
+            await Mouse(away, null);
+            await Mouse(from, null);
+            await Mouse(from, true);
+            for (int i = 1; i <= 6; i++) await Mouse(from.Lerp(to, i / 6f), null);
+            await Wait(0.3);
+            Note($"P{id} drag {caption}: aiming={HandViewer.IsAiming} dragging={HandViewer.IsDragging} card={HandViewer.DescribeDragCard()}");
+            await Snap($"P{id} drag: {caption}");
+            await Mouse(to, false);
+            await Wait(0.4);
+            Note($"P{id} released {caption}: dragging={HandViewer.IsDragging} bubble said={PileViewer.SaidCount > said}");
+            await Mouse(away, null);
+            await Wait(0.3);
+        }
+
+        // ---- All three hands stacked ----
+        Settings.MaxHandViewers = 3;
+        HandViewer.ViewMany(ids);
+        await Wait(0.6);
+        foreach (ulong id in ids)
+        {
+            foreach (string line in HandViewer.DumpHandOf(id, withGlow: true)) Note($"P{id} view: {line}");
+        }
+        await Snap("three stacked hands: 1000 statuses/curses/X, 1001 full + upgraded, 1002 afflictions");
+        foreach (var (tag, id) in new[] { ("VIEW4", 1000UL), ("VIEW5", 1001UL), ("VIEW6", 1002UL) })
+        {
+            foreach (string line in HandViewer.DumpHandOf(id, withGlow: false)) Log($"{tag} {line}");
+        }
+        Note("Pile Viewers: " + PileViewer.DescribeState());
+        // Does a full, raised teammate hand cover the End Turn button (and take its clicks)?
+        Control endTurn = NCombatRoom.Instance!.Ui.EndTurnButton;
+        Note("CombatUi children (index: name z): " + string.Join(", ", endTurn.GetParent().GetChildren().OfType<CanvasItem>()
+            .Select(c => $"{c.GetIndex()}: {c.Name} z{c.ZIndex}")));
+        Rect2 endRect = endTurn.GetGlobalRect();
+        foreach (float fx in new[] { 0.15f, 0.5f, 0.85f })
+        {
+            Vector2 at = new(endRect.Position.X + endRect.Size.X * fx, endRect.GetCenter().Y);
+            await Mouse(at, null);
+            await Wait(0.2);
+            Control? under = ((SceneTree)Engine.GetMainLoop()).Root.GuiGetHoveredControl();
+            Note($"End Turn button {endRect} at x {fx:0.00}: under the mouse {under?.GetPath().ToString() ?? "nothing"}; teammate card hovered {HandViewer.HoveredId ?? "none"}");
+        }
+        await Mouse(away, null);
+        await Wait(0.2);
+        HandViewer.ToggleHideOwnHand();
+        await Wait(0.4);
+        await Snap("three stacked hands, your hand hidden");
+        await Hover(1000, c => c.Type == CardType.Status, "front hand, hand hidden");
+        await Hover(1002, c => c.Type == CardType.Attack, "top hand, hand hidden");
+        HandViewer.ToggleHideOwnHand();
+
+        // ---- Each hand on its own, odd cards hovered and dragged ----
+        Settings.MaxHandViewers = 1;
+        HandViewer.View(1000);
+        await Wait(0.5);
+        await Snap("P1000 alone: statuses, curses, Skewer (X), Blade Dance");
+        await Hover(1000, c => c.Type == CardType.Status, "a status card");
+        await Hover(1000, c => c.Type == CardType.Curse, "a curse");
+        await Hover(1000, c => c is Skewer, "Skewer (X cost)");
+        await Drag(1000, c => c.Type == CardType.Status, new Vector2(960f, 400f), "a status card into the play zone");
+        await Drag(1000, c => c.Type == CardType.Curse, new Vector2(960f, 400f), "a curse into the play zone");
+        await Drag(1000, c => c is Skewer, enemy, "Skewer at the enemy");
+        HandViewer.View(1001);
+        await Wait(0.5);
+        await Snap("P1001 alone: 10 cards, 3 upgraded");
+        await Hover(1001, c => c.IsUpgraded, "an upgraded card");
+        HandViewer.View(1002);
+        await Wait(0.5);
+        await Snap("P1002 alone: afflicted cards");
+        await Hover(1002, c => c.Affliction != null, "an afflicted card");
+        await Hover(1002, c => c.Affliction is Entangled, "an attack entangled by the Tangled debuff (costs 1 more)");
+        await Drag(1002, c => c.Affliction != null && c.TargetType == TargetType.AnyEnemy, enemy, "an afflicted attack at the enemy");
+
+        // ---- Pile screens ----
+        foreach (var (id, pile) in new[] { (1000UL, PileType.Discard), (1000UL, PileType.Exhaust), (1001UL, PileType.Discard), (1001UL, PileType.Draw) })
+        {
+            int row = PileViewer.Teammates().FindIndex(t => t.player.NetId == id);
+            PileViewer.OpenTeammatePile(row, pile);
+            await Wait(0.6);
+            Note($"P{id} {pile}: {PileViewer.DescribeOpenView()}");
+            await Snap($"P{id} {pile} pile screen");
+            PileViewer.OpenTeammatePile(row, pile);
+            await Wait(0.4);
+            if (NCapstoneContainer.Instance?.InUse == true) await PressKey(Key.Escape);
+        }
+        Settings.TextList = true;
+        int row1000 = PileViewer.Teammates().FindIndex(t => t.player.NetId == 1000);
+        PileViewer.OpenTeammatePile(row1000, PileType.Discard);
+        await Wait(0.4);
+        await Snap("text list mode (Show piles as text): P1000 discard");
+        PileViewer.OpenTeammatePile(row1000, PileType.Discard);
+        Settings.TextList = false;
+        await Wait(0.3);
+
+        // ---- 1000 in odd states (lock-step) ----
+        HandViewer.View(1000);
+        if (await Ask(1))
+        {
+            await Wait(0.8);
+            Note("P1000 after Blade Dance: " + string.Join(" | ", HandViewer.DumpHandOf(1000, withGlow: true)));
+            await Snap("P1000 after Blade Dance (generated Shivs)");
+            await Hover(1000, c => c is Shiv, "a generated Shiv");
+        }
+        if (await Ask(2))
+        {
+            await Wait(0.8);
+            Note($"P1000 empty hand: shown {HandViewer.DumpHandOf(1000, withGlow: false).Count}; {HandViewer.DescribeCards()}; strip {string.Join("/", PileViewer.StripCounts(1000) ?? Array.Empty<string>())}");
+            await Snap("P1000 with an empty hand");
+        }
+        if (await Ask(3))
+        {
+            await Wait(1.5);
+            Note($"P1000 dead: viewing {HandViewer.DescribeViewed()}; {HandViewer.DescribeCards()}; strip {string.Join("/", PileViewer.StripCounts(1000) ?? Array.Empty<string>())}; {PileViewer.DescribeState()}");
+            await Snap("P1000 dead: their Pile Viewer and hand");
+            await Hover(1000, _ => true, "a dead teammate's card");
+        }
+        Send(me, "gold 1"); // releases 1001/1002 (they wait for ExploreSteps + 1)
+        await Wait(0.5);
+
+        // ---- A multi-enemy fight ----
+        Send(me, "win");
+        await WaitUntil(() => !CombatManager.Instance.IsInProgress, 20);
+        await Wait(1.5);
+        Send(me, "fight " + ModelDb.AllEncounters.First(e => e is CultistsNormal).Id.Entry, inCombat: false);
+        await WaitUntil(() => CombatManager.Instance.IsInProgress, 30);
+        await Wait(2.5);
+        var enemies = Combat.HittableEnemies.ToList();
+        Note($"fight 2: {enemies.Count} enemies; teammates alive: {string.Join(", ", PileViewer.Teammates().Select(t => $"{t.player.NetId}={!t.player.Creature.IsDead}"))}; viewing {HandViewer.DescribeViewed()}");
+        HandViewer.View(1001);
+        await Wait(0.6);
+        await Snap("fight 2 (Cultists): P1001's hand");
+        foreach (Creature e in enemies)
+        {
+            Vector2 at = NCombatRoom.Instance!.GetCreatureNode(e)!.Hitbox.GetGlobalRect().GetCenter();
+            await Drag(1001, c => c.TargetType == TargetType.AnyEnemy, at, $"an attack at {e.Name} (#{enemies.IndexOf(e) + 1})");
+        }
+        HandViewer.View(1000);
+        await Wait(0.6);
+        Note($"fight 2, P1000 (died last fight): alive {!t0.Creature.IsDead}; {HandViewer.DescribeCards()}");
+        await Snap("fight 2: P1000 (died in fight 1)");
+        if (!t0.Creature.IsDead && await Ask(4))
+        {
+            await Wait(2.5);
+            Note("P1000 choosing (Survivor discard): " + string.Join(" | ", HandViewer.DumpHandOf(1000, withGlow: true)));
+            await Snap("P1000 in a card choice (Survivor: discard a card)");
+            await Hover(1000, _ => true, "a card while they choose");
+            Vector2 cultist = NCombatRoom.Instance!.GetCreatureNode(Combat.HittableEnemies.First())!.Hitbox.GetGlobalRect().GetCenter();
+            await Drag(1000, c => c.TargetType == TargetType.AnyEnemy, cultist, "an attack while they choose");
+        }
+    }
 
     // ---------------- Harness: a teammate without the Pile Viewer (test fixtures only) ----------------
 

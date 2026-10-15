@@ -2,7 +2,7 @@
   "title": "Spire2 Pile Viewer",
   "description": "See your teammates' draw, exhaust, and discard piles, and their hand, in co-op.\n\nCosmetic only: teammates don't need the mod.\n\n[list]\n[*] Each teammate gets a Pile Viewer next to their name with live pile counts. [b]Click[/b] a pile to open it. [b]Drag[/b] a Pile Viewer to move it, or set it to float above the characters (F1).\n[*] Your teammate's hand is shown behind yours, with their live costs and playable glow. Hover a card to see it in full; drag it onto an enemy to preview its numbers.\n[*] Click the eye in a Pile Viewer to switch teammates. [b]Hide hand[/b] (or H) hides your own hand to read theirs.\n[*] Hotkeys: Shift+Z / V / C / H for teammate 1's draw / exhaust / discard / hand (Ctrl+ for teammate 2, Ctrl+Shift+ for teammate 3). Rebind to keys or extra mouse buttons.\n[*] [b]F1[/b] for settings.\n[/list]\n\nSource: https://github.com/hanryhu/Spire2PileViewer\nArchitecture adapted from BetterSpire2 by jdr.",
   "visibility": "public",
-  "changeNote": "v0.5.2: Your card over a teammate's head blinks gold only while they hold it (press or drag it in their Hand Viewer), also cards that don't aim like Defend; just hovering shows it without the gold. With your hand hidden, or when you're dead and spectating, a hovered card of the front Hand Viewer stays where it is (kept on screen) instead of jumping up.",
+  "changeNote": "v0.5.3: A Hand Viewer closeup's tooltips sit beside the card again (they could end up behind it). With teammate hands stacked, the End Turn button stays on top and clickable.",
   "tags": [],
   "dependencies": [],
   "contentDescriptors": []

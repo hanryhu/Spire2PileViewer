@@ -3,7 +3,7 @@
   "name": "Spire2 Pile Viewer",
   "author": "hanryhu",
   "description": "Shows teammates' draw, exhaust, and discard piles and their hand in co-op.",
-  "version": "v0.5.2",
+  "version": "v0.5.3",
   "has_pck": false,
   "has_dll": true,
   "dependencies": [],
