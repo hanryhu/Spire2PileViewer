@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Godot;
+using HarmonyLib;
 using MegaCrit.Sts2.Core.Combat;
 using System.Threading.Tasks;
 using MegaCrit.Sts2.Core.Entities.Cards;
@@ -24,6 +25,34 @@ namespace Spire2PileViewer;
 public static partial class HandViewer
 {
     /// <summary>Show this teammate's hand, or nobody's (auto-test helper; same as clicking their eye).</summary>
+    /// <summary>Show these teammates' hands, bottom first (auto-test).</summary>
+    internal static void ViewMany(params ulong[] netIds)
+    {
+        _viewed.Clear();
+        _viewed.AddRange(netIds);
+        _viewChosen = true;
+    }
+
+    /// <summary>One shown teammate hand as drawn, in hand order: card text (+ glow) (auto-test, explore).</summary>
+    internal static List<string> DumpHandOf(ulong netId, bool withGlow)
+    {
+        var shown = _hands.FirstOrDefault(h => h.NetId == netId);
+        if (shown == null || PileViewer.Teammates().FirstOrDefault(t => t.player.NetId == netId).player is not Player p) return new();
+        return PileType.Hand.GetPile(p).Cards.Select(c => shown.Cards.FirstOrDefault(s => s.Model == c))
+            .Where(s => s.Holder != null && GodotObject.IsInstanceValid(s.Holder))
+            .Select(s => DescribeCardNode(s.Holder.CardNode) + (withGlow ? $" glow={DescribeGlow(s.Holder.CardNode)}" : "")).ToList();
+    }
+
+    /// <summary>Peek point of the first card in a teammate's shown hand that matches (auto-test, explore).</summary>
+    internal static Vector2? PeekPointOf(ulong netId, Func<CardModel, bool> match)
+    {
+        var shown = _hands.FirstOrDefault(h => h.NetId == netId);
+        var entry = shown?.Cards.FirstOrDefault(c => GodotObject.IsInstanceValid(c.Holder) && match(c.Model)) ?? default;
+        if (entry.Holder == null) return null;
+        Rect2 rect = entry.Holder.Hitbox.GetGlobalRect();
+        return new Vector2(rect.GetCenter().X, rect.Position.Y + rect.Size.Y * Mathf.Max(Settings.HandVisible, 0.1f) * 0.5f);
+    }
+
     internal static void View(ulong? netId)
     {
         _viewed.Clear();
@@ -74,6 +103,17 @@ public static partial class HandViewer
     internal static string DescribeDragCard() => _drag?.CardNode is NCard node ? DescribeCardNode(node) : "no drag";
 
     internal static bool IsDragging => _drag != null;
+
+    /// <summary>The closeup's text tooltips and the card, on screen; null without a closeup or tooltips (auto-test).</summary>
+    internal static (Rect2 Card, Rect2 Tips)? CloseupTips()
+    {
+        if (_lastCloseup == null || !GodotObject.IsInstanceValid(_lastCloseup)) return null;
+        if (Traverse.Create(typeof(NHoverTipSet)).Field("_activeHoverTips").GetValue() is not Dictionary<Control, NHoverTipSet> tips
+            || !tips.TryGetValue(_lastCloseup, out NHoverTipSet? set) || !GodotObject.IsInstanceValid(set)) return null;
+        if (Traverse.Create(set).Field("_textHoverTipContainer").GetValue() is not Control text || text.Size == Vector2.Zero) return null;
+        Rect2 card = _lastCloseup.Hitbox.GetGlobalRect();
+        return (card, text.GetGlobalRect());
+    }
 
     /// <summary>Whether the card over this teammate's head is glowing (it's yours) (auto-test).</summary>
     internal static bool SignalGlowing(ulong netId) =>

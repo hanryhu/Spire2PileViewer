@@ -10,12 +10,15 @@
 #   -Suite harness: host + a teammate running only the test fixtures (-pileviewerharness: no Pile Viewer, like a
 #      teammate without the mod, but scriptable) + a modded teammate. Card signals across that boundary.
 #      Imperfect stand-in for vanilla (same mod list, so handshake/BaseLib behaviour isn't covered — use mixed).
+#   -Suite explore: 4 players with odd hands (statuses, curses, X cost, afflictions, upgrades, overflow, generated
+#      cards, a card choice, an empty hand, a dead teammate, a multi-enemy fight); saves game frames to
+#      %APPDATA%\SlayTheSpire2\showcase\shot_1NN.png and logs "EXPLORE"/"SHOTNOTE" lines. For looking, not gating.
 #   -Suite mixed -VanillaSide host|client: one side without mods; reach the fight by hand, then it runs.
 #   -WindowSizes 1280x720,2560x1440: override the window size of each pass, in order (always windowed).
 # Logs: %APPDATA%\SlayTheSpire2\spire2pileviewer_{host,1000,...}_log.txt (the last pass's)
 param(
     [int]$Players = 0,
-    [ValidateSet('fast', 'full', 'harness', 'mixed')][string]$Suite = 'fast',
+    [ValidateSet('fast', 'full', 'harness', 'explore', 'mixed')][string]$Suite = 'fast',
     [ValidateSet('', 'host', 'client')][string]$VanillaSide = '',
     [switch]$SkipFast,
     [int]$TimeoutSeconds = 0,
@@ -55,6 +58,7 @@ $passes = @(switch ($Suite) {
         $list
     }
     'harness' { Pass '1280x720' 3 @('-autotestsuite', 'harness') 150 -Harness }
+    'explore' { Pass '1280x720' 4 @('-autotestsuite', 'explore') 300 }
     'mixed' { Pass '1280x720' ([Math]::Max($Players, 2)) @('-autotestsuite', 'mixed') 900 }
 })
 for ($i = 0; $i -lt [Math]::Min($WindowSizes.Count, $passes.Count); $i++) { $passes[$i].Size = $WindowSizes[$i] }
@@ -103,7 +107,7 @@ foreach ($pass in $passes) {
         @(Get-Content $log -Encoding UTF8 | Where-Object { $_ -match "AutoTest: $tag " } | ForEach-Object { ($_ -split "AutoTest: $tag ", 2)[1] } |
             ForEach-Object { if ($tag -eq 'REF2' -or $tag -eq 'VIEW2') { $_ -split ', ' } else { $_ } } | Sort-Object)
     }
-    foreach ($pair in @(@('1', '1000'), @('2', '1000'), @('3', '1001'))) {
+    foreach ($pair in @(@('1', '1000'), @('2', '1000'), @('3', '1001'), @('4', '1000'), @('5', '1001'), @('6', '1002'))) {
         $ref = Dump $pair[1] "REF$($pair[0])"
         $view = Dump 'host' "VIEW$($pair[0])"
         if ($ref.Count -eq 0 -and $view.Count -eq 0) { continue }
