@@ -16,6 +16,7 @@ public static class Patches
         typeof(CombatLosePatch),
         typeof(ReturnToMainMenuPatch),
         typeof(IntentChangedPatch),
+        typeof(IntentInputChangedPatch),
 #if DEBUG
         typeof(AutoTest.LobbyReadyPatch), // auto-test only; not in Release builds
         typeof(AutoTest.PeerInputSendPatch),
@@ -48,6 +49,14 @@ public static class Patches
     {
         private static void Postfix(NMultiplayerPlayerIntentHandler __instance) =>
             Safe("IntentChanged", () => HandViewer.OnTeammateIntentChanged(__instance));
+    }
+
+    /// <summary>A teammate pressed or let go of the mouse (or moved it): the gold follows whether they're holding your card.</summary>
+    [HarmonyPatch(typeof(NMultiplayerPlayerIntentHandler), "OnPeerInputStateChanged")]
+    public static class IntentInputChangedPatch
+    {
+        private static void Postfix(NMultiplayerPlayerIntentHandler __instance) =>
+            Safe("IntentInputChanged", () => HandViewer.OnTeammateIntentChanged(__instance));
     }
 
     [HarmonyPatch(typeof(NGame), "ReturnToMainMenu")]

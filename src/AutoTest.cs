@@ -449,7 +449,7 @@ public static class AutoTest
         return Check($"mutator finished step {k}", MutatorPlayer.Gold >= _mutatorGold0 + k);
     }
 
-    private const int MutatorSteps = 8;
+    private const int MutatorSteps = 9;
 
     // Mutator, steps 6-7: what the host showed over their head while we watched.
     private static bool _watchHostHover;
@@ -566,6 +566,11 @@ public static class AutoTest
                 }
                 Check("...blinking gold about once a second: it's yours", HandViewer.SignalGlowing(Host.NetId) && widths.Min() < 0.02f && widths.Max() > 0.06f,
                     $"glow width {widths.Min():0.###}..{widths.Max():0.###} over 1.2 s");
+                bool wasGlowing = HandViewer.SignalGlowing(Host.NetId);
+                Settings.CardSignals = Settings.CardSignalMode.Off;
+                await Wait(0.2);
+                Check("card signals Off: no gold on your card over their head", wasGlowing && !HandViewer.SignalGlowing(Host.NetId), $"glowing before: {wasGlowing}");
+                Settings.CardSignals = Settings.CardSignalMode.SendAndReceive;
                 if (tried == null) break;
                 Send(me, "energy 3");
                 await WaitUntil(() => me.PlayerCombatState!.Energy >= 1, 5);
@@ -592,12 +597,19 @@ public static class AutoTest
                 await WaitUntil(() => tracker.GetHoveredModel(Host.NetId) is CardModel c && c.Owner == me, 3);
                 Check("once their closeup shows, you see your card over the host's head",
                     tracker.GetHoveredModel(Host.NetId) is CardModel shown && shown.Owner == me, $"{tracker.GetHoveredModel(Host.NetId)?.Id.Entry ?? "nothing"}");
-                await WaitUntil(() => HandViewer.SignalGlowing(Host.NetId), 2);
-                bool glowing = HandViewer.SignalGlowing(Host.NetId);
-                Settings.CardSignals = Settings.CardSignalMode.Off;
-                await Wait(0.2);
-                Check("card signals Off: no gold on your card over their head", glowing && !HandViewer.SignalGlowing(Host.NetId), $"glowing before: {glowing}");
-                Settings.CardSignals = Settings.CardSignalMode.SendAndReceive;
+                await Wait(0.3);
+                Check("...they only hover it: no gold", !HandViewer.SignalGlowing(Host.NetId));
+                break;
+            }
+            case 9:
+            {
+                // The host presses and holds one of our cards that doesn't aim (no drag): it blinks gold.
+                var tracker = RunManager.Instance.HoveredModelTracker;
+                await WaitUntil(() => tracker.GetHoveredModel(Host.NetId) is CardModel c && c.Owner == me && HandViewer.SignalGlowing(Host.NetId), 3);
+                Check("the host holds one of your cards that doesn't aim: it blinks gold",
+                    tracker.GetHoveredModel(Host.NetId) is CardModel heldCard && heldCard.Owner == me
+                    && heldCard.TargetType is not (TargetType.AnyEnemy or TargetType.AnyAlly) && HandViewer.SignalGlowing(Host.NetId),
+                    $"{tracker.GetHoveredModel(Host.NetId)?.Id.Entry ?? "nothing"}, gold {HandViewer.SignalGlowing(Host.NetId)}");
                 break;
             }
         }
@@ -1076,6 +1088,19 @@ public static class AutoTest
             await Wait(0.3);
         }
 
+        // ---- Holding one of their cards that doesn't aim (no drag): it blinks gold on their screen ----
+        int still = HandViewer.MiddleIndexOf(c => c.TargetType is not (TargetType.AnyEnemy or TargetType.AnyAlly));
+        if (Check("they have a card that doesn't aim", still >= 0))
+        {
+            Vector2 at = Peek(still);
+            await Mouse(at, null);
+            await Mouse(at, true);
+            await Ask(9);
+            await Mouse(at, false);
+            await Mouse(away, null);
+            await Wait(0.3);
+        }
+
         // ---- Network: card signals ride on the game's own cursor messages (at most one per 50 ms) ----
         async Task<int> Sweep(Settings.CardSignalMode mode)
         {
@@ -1251,7 +1276,7 @@ public static class AutoTest
             PileViewer.SimulatePress(PileViewer.StripIndexOf(1001), PileType.Hand);
             Send(me, "die");
             await WaitUntil(() => me.Creature.IsDead, 5);
-            await Wait(1.5);
+            await Wait(0.8);
             Check("you're dead and still see two teammates' hands", me.Creature.IsDead && HandViewer.StackedHands().Count == 2,
                 $"dead {me.Creature.IsDead}, hands {HandViewer.StackedHands().Count}");
             foreach (bool hidden in new[] { false, true })
@@ -1260,12 +1285,12 @@ public static class AutoTest
                 await Mouse(away, null);
                 await Wait(0.3);
                 await Mouse(HandViewer.PeekPointIn(1001, rightmost: true)!.Value, null);
-                await Wait(0.4);
+                await Wait(0.3);
                 var back = HandViewer.CloseupLift();
                 await Mouse(away, null);
                 await Wait(0.3);
                 await Mouse(HandViewer.PeekPointIn(MutatorId, rightmost: false)!.Value, null);
-                await Wait(0.4);
+                await Wait(0.3);
                 var front = HandViewer.CloseupLift();
                 bool frontStays = StaysOnScreen(front);
                 bool backRises = back is { Level: 2 } r && r.Lift > 20f && r.AboveScreenBottom >= -0.5f;
