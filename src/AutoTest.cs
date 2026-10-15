@@ -887,7 +887,7 @@ public static class AutoTest
         await Mouse(Peek(2), null);
         await Wait(0.3);
         var frontLift = HandViewer.CloseupLift();
-        Check("hand hidden: the front hand's closeup stays at its height", frontLift is { Level: 1 } fl && Mathf.Abs(fl.Lift) < 1f, $"{frontLift}");
+        Check("hand hidden: the front hand's closeup stays (only kept on screen)", StaysOnScreen(frontLift), $"{frontLift}");
         await Mouse(away, null);
         HandViewer.ToggleHideOwnHand();
         await Wait(0.3);
@@ -1211,8 +1211,8 @@ public static class AutoTest
             await Mouse(HandViewer.PeekPointIn(MutatorId, rightmost: false)!.Value, null);
             await Wait(0.4);
             var frontLift = HandViewer.CloseupLift();
-            Check("hand hidden: a card further back rises, the front hand's stays", backLift is { Level: 2 } bl && bl.Lift > 20f
-                && frontLift is { Level: 1 } fl && Mathf.Abs(fl.Lift) < 1f, $"back {backLift}, front {frontLift}");
+            Check("hand hidden: a card further back rises, the front hand's stays (only kept on screen)", backLift is { Level: 2 } bl
+                && bl.Lift > 20f && bl.AboveScreenBottom >= -0.5f && StaysOnScreen(frontLift), $"back {backLift}, front {frontLift}");
             await Mouse(away, null);
             HandViewer.ToggleHideOwnHand();
             await Wait(0.3);
@@ -1241,7 +1241,44 @@ public static class AutoTest
         Check("next fight keeps the choice (nobody) and shows your hand",
             CombatManager.Instance.IsInProgress && HandViewer.ViewedNetId == null && !HandViewer.HideOwnHand,
             $"viewing={HandViewer.ViewedNetId?.ToString() ?? "nobody"} hideOwnHand={HandViewer.HideOwnHand}");
+
+        // ---- Dead and spectating (last: you stay dead): nothing of yours to avoid ----
+        if (teammates.Any(t => t.player.NetId == 1001))
+        {
+            Settings.MaxHandViewers = 2;
+            Settings.HoverDelay = 0.1f;
+            HandViewer.View(MutatorId);
+            PileViewer.SimulatePress(PileViewer.StripIndexOf(1001), PileType.Hand);
+            Send(me, "die");
+            await WaitUntil(() => me.Creature.IsDead, 5);
+            await Wait(1.5);
+            Check("you're dead and still see two teammates' hands", me.Creature.IsDead && HandViewer.StackedHands().Count == 2,
+                $"dead {me.Creature.IsDead}, hands {HandViewer.StackedHands().Count}");
+            foreach (bool hidden in new[] { false, true })
+            {
+                if (HandViewer.HideOwnHand != hidden) HandViewer.ToggleHideOwnHand();
+                await Mouse(away, null);
+                await Wait(0.3);
+                await Mouse(HandViewer.PeekPointIn(1001, rightmost: true)!.Value, null);
+                await Wait(0.4);
+                var back = HandViewer.CloseupLift();
+                await Mouse(away, null);
+                await Wait(0.3);
+                await Mouse(HandViewer.PeekPointIn(MutatorId, rightmost: false)!.Value, null);
+                await Wait(0.4);
+                var front = HandViewer.CloseupLift();
+                bool frontStays = StaysOnScreen(front);
+                bool backRises = back is { Level: 2 } r && r.Lift > 20f && r.AboveScreenBottom >= -0.5f;
+                Check($"dead{(hidden ? ", hand hidden" : "")}: the front hand's closeup stays (on screen), a card further back rises",
+                    frontStays && backRises, $"front {front}, back {back}");
+            }
+            await Mouse(away, null);
+        }
     }
+
+    /// <summary>A front-hand closeup that stays put, or is only nudged up as far as keeping its bottom on screen.</summary>
+    private static bool StaysOnScreen((float Lift, int Level, float AboveScreenBottom)? closeup) =>
+        closeup is { Level: 1 } c && c.AboveScreenBottom >= -0.5f && (Mathf.Abs(c.Lift) < 1f || c.AboveScreenBottom < 6f);
 
     // ---------------- Harness: a teammate without the Pile Viewer (test fixtures only) ----------------
 

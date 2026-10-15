@@ -175,7 +175,7 @@ public static partial class HandViewer
     /// How far the closeup card sits above its place in its hand's fan (layer units; 0 = not moved up), and which
     /// hand it's in (1 = front) (auto-test).
     /// </summary>
-    internal static (float Lift, int Level)? CloseupLift()
+    internal static (float Lift, int Level, float AboveScreenBottom)? CloseupLift()
     {
         if (_lastCloseup == null || !GodotObject.IsInstanceValid(_lastCloseup)) return null;
         for (int k = 0; k < _hands.Count; k++)
@@ -185,7 +185,8 @@ public static partial class HandViewer
             var entry = _hands[k].Cards.FirstOrDefault(c => c.Holder == _lastCloseup);
             if (entry.Holder == null) continue;
             float fanY = HandPosHelper.GetPosition(pile.Count, pile.IndexOf(entry.Model)).Y - (k + 1) * RaiseFor(pile.Count);
-            return (fanY - _lastCloseup.Position.Y, k + 1);
+            float bottom = _lastCloseup.Position.Y + _lastCloseup.Hitbox.Size.Y * 0.5f * _lastCloseup.Scale.Y;
+            return (fanY - _lastCloseup.Position.Y, k + 1, ScreenBottom(_hands[k].Layer) - bottom);
         }
         return null;
     }

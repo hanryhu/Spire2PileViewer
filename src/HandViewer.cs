@@ -447,6 +447,13 @@ public static partial class HandViewer
         for (int k = 0; k < _hands.Count; k++) UpdateHand(_hands[k], viewed[k], k + 1, hand, container, shade, closeup, refresh);
     }
 
+    // How far a closeup's bottom edge stays above the bottom of the screen (layer units).
+    private const float ScreenMargin = 4f;
+
+    /// <summary>The bottom of the screen in a hand layer's coordinates.</summary>
+    private static float ScreenBottom(Control layer) =>
+        (layer.GetGlobalTransformWithCanvas().AffineInverse() * new Vector2(0f, layer.GetViewportRect().Size.Y)).Y;
+
     private static ShownHand CreateHand(ulong netId, Control container)
     {
         var layer = new Control { Name = $"Spire2PileViewer_TeammateHand_{netId}", MouseFilter = Control.MouseFilterEnum.Ignore };
@@ -566,15 +573,17 @@ public static partial class HandViewer
             }
             if (i == focusIndex)
             {
-                // Full size and upright. With your hand hidden, the front (lowest) hand has nothing over it, so its card
-                // stays where it is (moving it made it jitter under the mouse); a hand further back is partly covered
-                // by the ones in front, so its card rises like the native closeup. Otherwise lifted so the whole card
-                // shows above your hand instead of covering it — its bottom edge where your hand starts, but never
-                // above the mouse (an edge card hovered low, where your hand doesn't reach, stays under it).
+                // Full size and upright. With nothing of yours to avoid (your hand hidden, or no cards: dead and
+                // spectating, or an empty hand) the front (lowest) hand has nothing over it, so its card stays where
+                // it is (moving it made it jitter under the mouse), only kept on screen; a hand further back is partly
+                // covered by the ones in front, so its card rises like the native closeup. Otherwise lifted so the
+                // whole card shows above your hand instead of covering it — its bottom edge where your hand starts,
+                // but never above the mouse (an edge card hovered low, where your hand doesn't reach, stays under it).
                 float height = holder.Hitbox.Size.Y;
-                if (HideOwnHand)
+                if (HideOwnHand || hand.ActiveHolders.Count == 0)
                 {
                     if (level > 1) position.Y = -height * 0.5f + 2f;
+                    position.Y = Mathf.Min(position.Y, ScreenBottom(layer) - height * 0.5f - ScreenMargin);
                 }
                 else
                 {
