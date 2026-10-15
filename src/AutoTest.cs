@@ -1397,6 +1397,8 @@ public static class AutoTest
                 Send(me, "draw 2");
                 await WaitUntil(() => hand.Cards.Count >= 7, 5);
                 for (int i = 0; i < afflictions.Length && i < hand.Cards.Count; i++) Send(me, $"afflict {afflictions[i]} 1 {i}");
+                // The real Entangled: the Tangled debuff (Vine Shambler) entangles your attacks and makes them cost 1 more.
+                Send(me, $"power {Id<TangledPower>(ModelDb.AllPowers)} 1 {CreatureIndex(me.Creature)}");
                 break;
         }
         await Wait(2.0);
@@ -1573,6 +1575,7 @@ public static class AutoTest
         await Wait(0.5);
         await Snap("P1002 alone: afflicted cards");
         await Hover(1002, c => c.Affliction != null, "an afflicted card");
+        await Hover(1002, c => c.Affliction is Entangled, "an attack entangled by the Tangled debuff (costs 1 more)");
         await Drag(1002, c => c.Affliction != null && c.TargetType == TargetType.AnyEnemy, enemy, "an afflicted attack at the enemy");
 
         // ---- Pile screens ----

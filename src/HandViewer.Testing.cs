@@ -178,8 +178,16 @@ public static partial class HandViewer
         : "no hand";
 
     /// <summary>"ID|cost|description" for one rendered card (auto-test comparisons).</summary>
+    /// <summary>The cost number's color as the game names it ("" for the usual cream): blue raised, green lowered, red can't afford.</summary>
+    private static string CostColor(Label? label)
+    {
+        if (label == null) return "";
+        Color c = label.GetThemeColor("font_color");
+        return c == StsColors.cream ? "" : c == StsColors.energyBlue ? "(blue)" : c == StsColors.green ? "(green)" : c == StsColors.red ? "(red)" : $"({c.ToHtml(false)})";
+    }
+
     internal static string DescribeCardNode(NCard? card) => card == null ? "?" :
-        $"{card.Model?.Id.Entry}|cost={card.GetNodeOrNull<Label>("%EnergyLabel")?.Text}" +
+        $"{card.Model?.Id.Entry}|cost={card.GetNodeOrNull<Label>("%EnergyLabel")?.Text}{CostColor(card.GetNodeOrNull<Label>("%EnergyLabel"))}" +
         $"|ench={(card.GetNodeOrNull<Control>("%Enchantment") is Control e && e.Visible ? e.GetNodeOrNull<Label>("Label")?.Text ?? "?" : "-")}" +
         $"|{card.GetNodeOrNull<RichTextLabel>("%DescriptionLabel")?.Text?.Replace('\n', ' ')}";
 

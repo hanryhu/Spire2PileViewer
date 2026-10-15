@@ -45,6 +45,13 @@ across its width.
 | ![](exploration/exhaust-pile.jpg) Exhaust pile with statuses: "exhausted by The Silent this combat". | ![](exploration/card-choice.jpg) Teammate choosing a card to discard (Survivor): their hand stays viewable, hover and aim work. |
 | ![](exploration/dead-teammate.jpg) Dead teammate: Pile Viewer 0/0/0/0, no cards. Next fight they're back (1 HP). | ![](exploration/multi-enemy-aim.jpg) Cultists (2 enemies): aims at each. |
 
+**Cost colors.** A raised cost is drawn the game's way: the Tangled debuff (Vine Shambler) entangles the owner's attacks
+and makes them cost 1 more — shown as a blue **2**, the game's color for a raised cost (red is only for "can't afford").
+The "Entangled" marker on its own (as in the tooltip screenshots above, put there with the debug console) changes
+nothing, on the owner's screen too. The host-vs-owner comparisons now include the cost color.
+
+![](exploration/tangled-cost.jpg)
+
 Also checked: afflictions (Bound, Entangled, Hexed, Ringing, Tainted) show the same text and cost as on the owner's
 screen; 3 upgraded cards; Blade Dance's Shiv appears live and hovers fine; an empty hand shows nothing and doesn't break
 the stack; pile screens with 3 / 2 / 12 cards.
