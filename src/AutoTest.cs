@@ -882,6 +882,16 @@ public static class AutoTest
         Settings.HoverDelay = 0.1f;
         await Wait(0.3);
 
+        // ---- Hand hidden: nothing covers the front hand, so its closeup isn't moved up ----
+        HandViewer.ToggleHideOwnHand();
+        await Mouse(Peek(2), null);
+        await Wait(0.3);
+        var frontLift = HandViewer.CloseupLift();
+        Check("hand hidden: the front hand's closeup stays at its height", frontLift is { Level: 1 } fl && Mathf.Abs(fl.Lift) < 1f, $"{frontLift}");
+        await Mouse(away, null);
+        HandViewer.ToggleHideOwnHand();
+        await Wait(0.3);
+
         // ---- Your own card play wins ----
         if (NPlayerHand.Instance!.ActiveHolders.FirstOrDefault() is NHandCardHolder own)
         {
@@ -1190,6 +1200,21 @@ public static class AutoTest
                 $"lower hand closeup {lowerShown}; right after the move: {moved}; then: {HandViewer.DescribeHover()}");
             await Mouse(away, null);
             Settings.HoverDelay = 0.1f;
+            await Wait(0.3);
+            // Hand hidden: a hand further back is partly covered by the front one, so its closeup still rises.
+            HandViewer.ToggleHideOwnHand();
+            await Mouse(HandViewer.PeekPointIn(1001, rightmost: true)!.Value, null);
+            await Wait(0.4);
+            var backLift = HandViewer.CloseupLift();
+            await Mouse(away, null);
+            await Wait(0.3);
+            await Mouse(HandViewer.PeekPointIn(MutatorId, rightmost: false)!.Value, null);
+            await Wait(0.4);
+            var frontLift = HandViewer.CloseupLift();
+            Check("hand hidden: a card further back rises, the front hand's stays", backLift is { Level: 2 } bl && bl.Lift > 20f
+                && frontLift is { Level: 1 } fl && Mathf.Abs(fl.Lift) < 1f, $"back {backLift}, front {frontLift}");
+            await Mouse(away, null);
+            HandViewer.ToggleHideOwnHand();
             await Wait(0.3);
             PileViewer.SimulatePress(PileViewer.StripIndexOf(MutatorId), PileType.Hand);
             await Wait(0.2);

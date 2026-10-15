@@ -566,13 +566,15 @@ public static partial class HandViewer
             }
             if (i == focusIndex)
             {
-                // Full size and upright. With your hand hidden: the native closeup. Otherwise lifted so the whole
-                // card shows above your hand instead of covering it — its bottom edge where your hand starts, but
-                // never above the mouse (an edge card hovered low, where your hand doesn't reach, stays under it).
+                // Full size and upright. With your hand hidden, the front (lowest) hand has nothing over it, so its card
+                // stays where it is (moving it made it jitter under the mouse); a hand further back is partly covered
+                // by the ones in front, so its card rises like the native closeup. Otherwise lifted so the whole card
+                // shows above your hand instead of covering it — its bottom edge where your hand starts, but never
+                // above the mouse (an edge card hovered low, where your hand doesn't reach, stays under it).
                 float height = holder.Hitbox.Size.Y;
                 if (HideOwnHand)
                 {
-                    position.Y = -height * 0.5f + 2f;
+                    if (level > 1) position.Y = -height * 0.5f + 2f;
                 }
                 else
                 {

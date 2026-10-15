@@ -171,6 +171,25 @@ public static partial class HandViewer
         return new Vector2(rect.GetCenter().X, rect.Position.Y + rect.Size.Y * Mathf.Max(Settings.HandVisible, 0.1f) * 0.5f);
     }
 
+    /// <summary>
+    /// How far the closeup card sits above its place in its hand's fan (layer units; 0 = not moved up), and which
+    /// hand it's in (1 = front) (auto-test).
+    /// </summary>
+    internal static (float Lift, int Level)? CloseupLift()
+    {
+        if (_lastCloseup == null || !GodotObject.IsInstanceValid(_lastCloseup)) return null;
+        for (int k = 0; k < _hands.Count; k++)
+        {
+            if (PileViewer.Teammates().FirstOrDefault(t => t.player.NetId == _hands[k].NetId).player is not Player p) continue;
+            var pile = PileType.Hand.GetPile(p).Cards.ToList();
+            var entry = _hands[k].Cards.FirstOrDefault(c => c.Holder == _lastCloseup);
+            if (entry.Holder == null) continue;
+            float fanY = HandPosHelper.GetPosition(pile.Count, pile.IndexOf(entry.Model)).Y - (k + 1) * RaiseFor(pile.Count);
+            return (fanY - _lastCloseup.Position.Y, k + 1);
+        }
+        return null;
+    }
+
     internal static Vector2? CardCenter(int index) =>
         index < TopCards.Count && GodotObject.IsInstanceValid(TopCards[index].Holder)
             ? TopCards[index].Holder.Hitbox.GetGlobalRect().GetCenter() : null;
