@@ -205,11 +205,42 @@ public static partial class HandViewer
         if (_hideButton.Text != text) _hideButton.Text = text;
         _hideButtonStyle!.BorderColor = HideOwnHand ? new Color(1f, 0.85f, 0.35f) : new Color(0.8f, 0.6f, 0.2f, 0.8f);
 
-        // Default: centered just above the energy counter (left side); plus the player's drag offset.
+        // Default: centered just above the energy counter (left side) — or above the Fool's bow and arrows, which sit
+        // there; plus the player's drag offset.
         Rect2 rect = EnergyRect(energy!);
         Vector2 size = _hideButton.Size;
-        _hideButton.GlobalPosition = new Vector2(rect.Position.X + (rect.Size.X - size.X) / 2f, rect.Position.Y - size.Y - 8f)
+        float top = rect.Position.Y;
+        if (FoolUiRect(room) is Rect2 fool && fool.Position.X < rect.End.X && fool.End.X > rect.Position.X) top = Mathf.Min(top, fool.Position.Y);
+        _hideButton.GlobalPosition = new Vector2(rect.Position.X + (rect.Size.X - size.X) / 2f, top - size.Y - 8f)
             + Settings.HideButtonOffset;
+    }
+
+    /// <summary>
+    /// On-screen rect of the Fool's bow and arrows (game v0.113+, shown only when you play the Fool), or null. Looked up
+    /// by node name so the mod doesn't depend on the type.
+    /// </summary>
+    internal static Rect2? FoolUiRect(NCombatRoom room)
+    {
+        if (room.Ui?.GetNodeOrNull<Control>("%FoolCombatUi") is not Control fool || !fool.IsVisibleInTree()) return null;
+        Rect2? rect = null;
+        var viewport = fool.GetViewportRect().Size;
+        foreach (Control c in Descendants(fool).Prepend(fool))
+        {
+            Rect2 r = c.GetGlobalRect();
+            // Skip empty holders and full-screen layout containers.
+            if (!c.IsVisibleInTree() || r.Size.X < 1f || r.Size.Y < 1f || r.Size.X > viewport.X / 2f || r.Size.Y > viewport.Y / 2f) continue;
+            rect = rect is Rect2 m ? m.Merge(r) : r;
+        }
+        return rect;
+    }
+
+    private static IEnumerable<Control> Descendants(Node node)
+    {
+        foreach (Node child in node.GetChildren())
+        {
+            if (child is Control c) yield return c;
+            foreach (Control d in Descendants(child)) yield return d;
+        }
     }
 
     /// <summary>On-screen rect of the energy counter (the container itself can be zero-sized; use its children).</summary>

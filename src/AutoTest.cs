@@ -3,6 +3,7 @@ using MegaCrit.Sts2.Core.Localization;
 using MegaCrit.Sts2.Core.Localization.DynamicVars;
 using MegaCrit.Sts2.Core.Models.Enchantments;
 using MegaCrit.Sts2.Core.Models.Relics;
+using MegaCrit.Sts2.Core.Models.Characters;
 using MegaCrit.Sts2.Core.Models.Powers;
 using MegaCrit.Sts2.Core.Models.Cards;
 using MegaCrit.Sts2.Core.Models.Encounters;
@@ -175,6 +176,9 @@ public static class AutoTest
     /// <summary>-autotestskipfast (with full): leave out the fast checks (they ran separately).</summary>
     private static readonly bool SkipFastChecks = OS.GetCmdlineArgs().Contains("-autotestskipfast");
 
+    /// <summary>-autotesthostcharacter Fool: the host plays this character (class name) instead of the first one.</summary>
+    private static readonly string HostCharacter = ArgString("-autotesthostcharacter", "");
+
     /// <summary>-pileviewerharness: this instance runs only the test fixtures (no Pile Viewer patches).</summary>
     internal static readonly bool Harness = OS.GetCmdlineArgs().Contains("-pileviewerharness");
 
@@ -227,7 +231,9 @@ public static class AutoTest
                 Log($"lobby players: {lobby.Players.Count}");
             }
             await Wait(0.3);
-            CharacterModel character = ModelDb.AllCharacters.ElementAt(isHost ? 0 : 1 + ClientIndex);
+            CharacterModel character = isHost && HostCharacter != "" ? ModelDb.AllCharacters.First(c => c.GetType().Name.Equals(HostCharacter, StringComparison.OrdinalIgnoreCase))
+                : !isHost && Full && ClientIndex == 1 ? ModelDb.AllCharacters.First(c => c is Fool) // the static reference: the newest character
+                : ModelDb.AllCharacters.ElementAt(isHost ? 0 : 1 + ClientIndex);
             lobby.SetLocalCharacter(character);
             await Wait(0.3);
             lobby.SetReady(ready: true);
@@ -624,6 +630,14 @@ public static class AutoTest
     /// <summary>Second client (full, 3 players): its own hand as the reference for the host's 3rd-player view.</summary>
     private static async Task StaticReference()
     {
+        if (Me.Character is Fool)
+        {
+            // A Shoot card: its numbers and red glow depend on the owner's arrows.
+            CardPile hand = PileType.Hand.GetPile(Me);
+            int count = hand.Cards.Count;
+            Send(Me, $"card {Id<QuickShot>(ModelDb.AllCards)}");
+            await WaitUntil(() => hand.Cards.Count > count && NPlayerHand.Instance!.ActiveHolders.Count == hand.Cards.Count, 10);
+        }
         await Wait(1.0);
         foreach (string line in HandViewer.DumpOwnHand()) Log("REF3 " + line);
     }
@@ -848,6 +862,14 @@ public static class AutoTest
         Check("costs drawn from their state", wrongCost.Count == 0, string.Join(", ", wrongCost));
 
         // ---- Hide hand ----
+        if (Me.Character is Fool)
+        {
+            // Game v0.113's Fool keeps a bow and arrows above the energy counter, where the button sits by default.
+            Rect2? fool = HandViewer.FoolUiRect(NCombatRoom.Instance!);
+            Rect2? button = HandViewer.HideButton?.GetGlobalRect();
+            Check("the Hide hand button sits clear of the Fool's bow and arrows", fool is Rect2 f && button is Rect2 r && !r.Intersects(f),
+                $"button {button}, bow and arrows {fool}");
+        }
         HandViewer.HideButton?.EmitSignal(BaseButton.SignalName.Pressed);
         await Wait(0.1);
         Check("Hide hand hides your hand", HandViewer.HideOwnHand && NPlayerHand.Instance!.CardHolderContainer.Modulate.A < 0.01f);
