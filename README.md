@@ -35,6 +35,11 @@ Cosmetic only: teammates don't need the mod, and nothing you do with it is sent 
 
 Subscribe on the [Steam Workshop](https://steamcommunity.com/sharedfiles/filedetails/?id=3818266065), or copy `Spire2PileViewer.dll` and `Spire2PileViewer.json` into `<Slay the Spire 2>/mods/Spire2PileViewer/`.
 
+## Game versions
+
+One build works on both the stable branch and the public beta (currently v0.111.0 and v0.113.0). The mod must
+stay backwards compatible: see [Compatibility](PILE_VIEWER.md#compatibility-requirement).
+
 ## Build
 
 Needs the .NET 9 SDK and the game installed (set `Sts2Dir` in `src/Spire2PileViewer.csproj` if it isn't in

@@ -15,6 +15,8 @@
 #      %APPDATA%\SlayTheSpire2\showcase\shot_1NN.png and logs "EXPLORE"/"SHOTNOTE" lines. For looking, not gating.
 #   -Suite mixed -VanillaSide host|client: one side without mods; reach the fight by hand, then it runs.
 #   -WindowSizes 1280x720,2560x1440: override the window size of each pass, in order (always windowed).
+#   -HostCharacter Fool: the host plays this character (class name) in every pass. The full suite's second pass
+#      already uses the Fool (the newest character, with its own combat UI); its third player is a Fool too.
 # Logs: %APPDATA%\SlayTheSpire2\spire2pileviewer_{host,1000,...}_log.txt (the last pass's)
 param(
     [int]$Players = 0,
@@ -23,6 +25,7 @@ param(
     [switch]$SkipFast,
     [int]$TimeoutSeconds = 0,
     [string[]]$WindowSizes = @(),
+    [string]$HostCharacter = '',
     [string]$GameDir = 'C:\Program Files (x86)\Steam\steamapps\common\Slay the Spire 2'
 )
 
@@ -54,7 +57,7 @@ $passes = @(switch ($Suite) {
     'fast' { Pass '1280x720' ([Math]::Max($Players, 2)) @('-autotestsuite', 'fast') 90 }
     'full' {
         $list = @(Pass '1280x720' ([Math]::Max($Players, 3)) @('-autotestsuite', 'full', '-autotestskipfast') 150)
-        if (-not $SkipFast) { $list += Pass (Monitor) 2 @('-autotestsuite', 'fast') 90 }
+        if (-not $SkipFast) { $list += Pass (Monitor) 2 @('-autotestsuite', 'fast', '-autotesthostcharacter', 'Fool') 90 }
         $list
     }
     'harness' { Pass '1280x720' 3 @('-autotestsuite', 'harness') 150 -Harness }
@@ -80,7 +83,9 @@ foreach ($pass in $passes) {
 
     # launch-mp applies the test settings, which installs the dev build; the restore at the end removes it.
     $extra = @('-pileviewerautotest', '-pileviewerplayers', $n) + $pass.Args
+    if ($HostCharacter) { $extra += @('-autotesthostcharacter', $HostCharacter) }
     $harness = [bool]$pass.Harness
+    $before = @(Get-Process SlayTheSpire2 -ErrorAction SilentlyContinue | ForEach-Object Id)
     & (Join-Path $PSScriptRoot 'launch-mp.ps1') -Players $n -GameDir $GameDir -VanillaSide $VanillaSide -QuietConsole `
         -WindowSize $pass.Size -HarnessClient:$harness -ExtraArgs $extra | Out-Null
 
@@ -121,8 +126,11 @@ foreach ($pass in $passes) {
     }
 
     if ($Suite -ne 'mixed') {
-        Get-Process SlayTheSpire2 -ErrorAction SilentlyContinue | Stop-Process -Force
-        for ($t = 0; $t -lt 40 -and (Get-Process SlayTheSpire2 -ErrorAction SilentlyContinue); $t++) { Start-Sleep -Milliseconds 250 }
+        # Close only the instances this pass launched (never a game the user started meanwhile).
+        $ours = @(Get-Process SlayTheSpire2 -ErrorAction SilentlyContinue | Where-Object { $before -notcontains $_.Id })
+        $ours | Stop-Process -Force
+        $ids = @($ours | ForEach-Object Id)
+        for ($t = 0; $t -lt 40 -and $ids.Count -and (Get-Process -Id $ids -ErrorAction SilentlyContinue); $t++) { Start-Sleep -Milliseconds 250 }
     }
 }
 
