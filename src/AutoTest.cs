@@ -3,7 +3,6 @@ using MegaCrit.Sts2.Core.Localization;
 using MegaCrit.Sts2.Core.Localization.DynamicVars;
 using MegaCrit.Sts2.Core.Models.Enchantments;
 using MegaCrit.Sts2.Core.Models.Relics;
-using MegaCrit.Sts2.Core.Models.Characters;
 using MegaCrit.Sts2.Core.Models.Powers;
 using MegaCrit.Sts2.Core.Models.Cards;
 using MegaCrit.Sts2.Core.Models.Encounters;
@@ -198,6 +197,11 @@ public static class AutoTest
 
     private static bool _started;
 
+    private static CharacterModel? CharacterNamed(string name) =>
+        ModelDb.AllCharacters.FirstOrDefault(c => c.GetType().Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+
+    private static bool IsFool(Player player) => player.Character.GetType().Name == "Fool";
+
     /// <summary>Peer-input messages this game sent (the game's cursor/hover/targeting sync), for the network check.</summary>
     internal static int PeerInputSends;
 
@@ -231,9 +235,11 @@ public static class AutoTest
                 Log($"lobby players: {lobby.Players.Count}");
             }
             await Wait(0.3);
-            CharacterModel character = isHost && HostCharacter != "" ? ModelDb.AllCharacters.First(c => c.GetType().Name.Equals(HostCharacter, StringComparison.OrdinalIgnoreCase))
-                : !isHost && Full && ClientIndex == 1 ? ModelDb.AllCharacters.First(c => c is Fool) // the static reference: the newest character
-                : ModelDb.AllCharacters.ElementAt(isHost ? 0 : 1 + ClientIndex);
+            // By class name, so this builds against game versions without the Fool (v0.113+); falls back to the usual pick.
+            CharacterModel character = (isHost && HostCharacter != "" ? CharacterNamed(HostCharacter)
+                    : !isHost && Full && ClientIndex == 1 ? CharacterNamed("Fool") // the static reference: the newest character
+                    : null)
+                ?? ModelDb.AllCharacters.ElementAt(isHost ? 0 : 1 + ClientIndex);
             lobby.SetLocalCharacter(character);
             await Wait(0.3);
             lobby.SetReady(ready: true);
@@ -630,12 +636,12 @@ public static class AutoTest
     /// <summary>Second client (full, 3 players): its own hand as the reference for the host's 3rd-player view.</summary>
     private static async Task StaticReference()
     {
-        if (Me.Character is Fool)
+        if (IsFool(Me))
         {
             // A Shoot card: its numbers and red glow depend on the owner's arrows.
             CardPile hand = PileType.Hand.GetPile(Me);
             int count = hand.Cards.Count;
-            Send(Me, $"card {Id<QuickShot>(ModelDb.AllCards)}");
+            Send(Me, "card " + ModelDb.AllCards.First(c => c.GetType().Name == "QuickShot").Id.Entry);
             await WaitUntil(() => hand.Cards.Count > count && NPlayerHand.Instance!.ActiveHolders.Count == hand.Cards.Count, 10);
         }
         await Wait(1.0);
@@ -862,7 +868,7 @@ public static class AutoTest
         Check("costs drawn from their state", wrongCost.Count == 0, string.Join(", ", wrongCost));
 
         // ---- Hide hand ----
-        if (Me.Character is Fool)
+        if (IsFool(Me))
         {
             // Game v0.113's Fool keeps a bow and arrows above the energy counter, where the button sits by default.
             Rect2? fool = HandViewer.FoolUiRect(NCombatRoom.Instance!);

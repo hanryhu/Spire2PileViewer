@@ -18,6 +18,27 @@ Living notes so work can resume after an interruption. Newest status first.
 Each milestone is one or more commits ending in an annotated tag `mN`, so testing can roll back with
 `git checkout mN` and rebuild.
 
+## Compatibility requirement
+
+**The mod must always be backwards compatible**: one published DLL has to load and work on the game's stable branch
+*and* on the public beta (2026-11-13: stable v0.111.0, beta v0.113.0), and the source, Debug tests included, has to
+build against either. A game update is not a reason to drop the older branch.
+
+- **Don't reference types or members that only exist in the newer game** — not even in tests (`AutoTest.cs`,
+  `*.Testing.cs`). Find new content by name instead: node paths (`GetNodeOrNull("%FoolCombatUi")`), class names
+  (`c.GetType().Name == "Fool"`), model ids. Code paths for new content must be no-ops when it's missing.
+- **Don't call methods whose signature differs between the branches.** C# binds calls to the exact signature, so
+  a clean build doesn't prove the other branch can load the DLL (v0.113 changed e.g.
+  `NHotkeyManager.RemoveHotkeyPressedBinding`'s return type). Before publishing, compare the game members the new
+  DLL references with the last published DLL's (`dotnet run --project tools/refcheck -- <dll>
+  <game data dir> --list`; without `--list` it checks every reference resolves against that game). Any new reference must exist with the same signature on both
+  branches (check both decompiles in `source
+epos\sts2-decompiled`).
+- Anything reached by name (Harmony targets, `Traverse` fields, node paths) must exist on both branches, or be
+  skipped when missing.
+- Tests: run the suites on whichever branch is installed. Tests for new content skip themselves on the older
+  branch (e.g. without a Fool, the Fool host/teammate fall back to the usual characters).
+
 ## Steam Workshop
 
 - Item **3818266065** (friends-only at first upload, 2026-10-11), workspace `workshop/` (`workshop.json`,
