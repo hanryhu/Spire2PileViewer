@@ -27,9 +27,17 @@ Tags are `hvN` (Pile Viewer uses `mN`). Each milestone ends in an annotated tag 
 | 12.1 | Hide/show hand hotkey works with the Hide hand button hidden; hover delay default 0.1 s, 0.05 s steps, max 1 s. Mixed installs verified (`launch-mp.ps1 -VanillaSide host|client`, `-nomods`): the manifest says `affects_gameplay: false`, so the handshake only logs "Mismatch in non-gameplay relevant mods ... allowed"; vanilla client + modded host and vanilla host + modded client both reached a fight by playing (Neow, map vote) and the modded side used strips, pile screen, hand view, closeup, aim preview and H with no desync. Debug console commands (`fight`) aren't usable with a vanilla peer, so the `mixed` suite plays to the first fight | done | `hv12.1` |
 | — | Test suite consolidated: `fast` (~30 s with launch, every feature once) and `full` (≈ 50 s, before pushes) with PASS/FAIL checks and a runner that summarizes, compares cross-instance dumps, closes the games and restores settings; condition waits and a gold lock-step instead of fixed sleeps (the old hands suite took ~4 min). Solo autotest dropped | done | `tests-fast` |
 
+## v0.5.5 (2026-11-20)
+
+- The Hide hand button is **off by default** (user: not important, H and your own Pile Viewer's eye do the same).
+  Saved settings files keep their value. Tests that use it turn it on.
+- The end-of-fight clean-up ran only when strips existed, so in singleplayer / with the strips off the button (and
+  a hidden hand) stayed on the rewards screen. Full-suite check: the first fight ends with the strips off.
+
 ## Game v0.113.0 (2026-11-13)
 
-Checked against a v0.113.0 decompile (`sourceepos\sts2-decompiled0.113.0`): every member the mod reaches by name
+Checked against a v0.113.0 decompile (`source
+epos\sts2-decompiled0.113.0`): every member the mod reaches by name
 (Harmony targets, `Traverse` fields, node paths in code) still exists, and the published v0.5.3 DLL's 512 references
 into the game all resolve. New: the **Fool** (6th character, last in `ModelDb.AllCharacters`, so existing tests'
 characters are unchanged) has a bow/arrows UI (`NCombatUi` child `%FoolCombatUi`) above the energy counter, where the

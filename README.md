@@ -19,7 +19,7 @@ Cosmetic only: teammates don't need the mod, and nothing you do with it is sent 
 - **Hover** (or click) one of their cards to see it in full.
 - **Drag** one of their cards onto an enemy to preview its numbers against that enemy, from their state.
 - Click the **eye** in a Pile Viewer to switch teammates or hide their hand (Shift+H, Ctrl+H, Ctrl+Shift+H).
-- **Hide hand** (or H) hides your own hand to read theirs.
+- **H** hides your own hand to read theirs (a Hide hand button can be turned on in F1).
 
 ![Teammate's hand behind yours](assets/hand-viewer.png)
 

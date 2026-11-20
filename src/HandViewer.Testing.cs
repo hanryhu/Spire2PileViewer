@@ -268,6 +268,15 @@ public static partial class HandViewer
         ? string.Join(", ", h.ActiveHolders.Select(x => x.GetNodeOrNull<Control>("HandIndex")?.Position.Y.ToString("0") ?? "?"))
         : "no hand";
 
+    /// <summary>How many teammate hands are drawn right now (auto-test).</summary>
+    internal static int ShownHandCount => _hands.Count;
+
+    /// <summary>Anything of the Hand Viewer still on screen: the Hide hand button, teammate cards, your hand hidden (auto-test).</summary>
+    internal static bool HasLeftovers => HideButton is { Visible: true } || _hands.Count > 0 || HideOwnHand;
+
+    internal static string DescribeLeftovers() =>
+        $"button={(HideButton is Button b ? (b.Visible ? "visible" : "hidden") : "none")} hands={_hands.Count} hideOwnHand={HideOwnHand} inCombat={CombatManager.Instance.IsInProgress}";
+
     internal static Button? HideButton => _hideButton != null && GodotObject.IsInstanceValid(_hideButton) ? _hideButton : null;
 
     /// <summary>One-line summary for logs and the auto-test.</summary>
