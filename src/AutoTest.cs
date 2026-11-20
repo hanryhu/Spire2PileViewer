@@ -1325,11 +1325,19 @@ public static class AutoTest
         }
 
         // ---- Next fight: whose hand is shown carries over, Hide hand resets ----
-        HandViewer.View(null);
+        // Pile Viewer strips off for this fight's end: the Hand Viewer's own things must go with the fight too.
+        HandViewer.View(MutatorId);
         if (!HandViewer.HideOwnHand) HandViewer.ToggleHideOwnHand();
+        Settings.Enabled = false;
+        await Wait(0.3);
+        Check("strips off: the Hide hand button and teammate hand stay in the fight", HandViewer.HideButton is { Visible: true } && HandViewer.ShownHandCount > 0,
+            HandViewer.DescribeLeftovers());
         Send(me, "win");
         await WaitUntil(() => !CombatManager.Instance.IsInProgress, 20);
         await Wait(1.5);
+        Check("after the fight (rewards): no Hide hand button, teammate hand or hidden hand left", !HandViewer.HasLeftovers, HandViewer.DescribeLeftovers());
+        Settings.Enabled = true;
+        HandViewer.View(null);
         Send(me, "fight " + PickEncounter().Id.Entry, inCombat: false);
         await WaitUntil(() => CombatManager.Instance.IsInProgress, 30);
         await Wait(1.0);

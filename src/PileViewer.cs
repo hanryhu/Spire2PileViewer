@@ -241,7 +241,8 @@ public static partial class PileViewer
         CombatState? state = CombatManager.Instance.DebugOnlyGetState();
         if (room == null || state == null || !CombatManager.Instance.IsInProgress)
         {
-            if (_widgets.Count > 0) Hide();
+            // Not only when there are strips: solo, or with the strips off, the Hand Viewer's button is all there is.
+            if (_widgets.Count > 0 || HandViewer.HasAnythingShown) Hide();
             return;
         }
 

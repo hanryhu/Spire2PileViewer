@@ -108,6 +108,9 @@ public static partial class HandViewer
         ModLog.Info($"HandViewer: hide own hand = {HideOwnHand}");
     }
 
+    /// <summary>The Hide hand button, teammate cards or your hand hidden: something to clear when the fight ends.</summary>
+    internal static bool HasAnythingShown => _hideButton != null || _hands.Count > 0 || HideOwnHand;
+
     /// <summary>
     /// Combat over: drop the cards, the button and "hide my hand" (so every fight starts with your hand shown).
     /// Whose hand is shown carries over to the next fight.
