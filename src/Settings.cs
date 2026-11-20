@@ -42,7 +42,7 @@ public static class Settings
         public string alignment { get; set; } = "fixed";
         public Dictionary<string, string>? hotkeys { get; set; }
         public bool handViewer { get; set; } = true;
-        public bool hideHandButton { get; set; } = true;
+        public bool hideHandButton { get; set; } = false;
         public float handShadow { get; set; } = 0.85f;
         public float handVisible { get; set; } = 0.20f;
         public float hoverDelay { get; set; } = 0.1f;
@@ -79,7 +79,7 @@ public static class Settings
     public static bool HandViewerEnabled = true;
 
     /// <summary>Show the "Hide hand" button under End Turn.</summary>
-    public static bool HideHandButtonEnabled = true;
+    public static bool HideHandButtonEnabled = false; // H and your own Pile Viewer's eye do the same
 
     /// <summary>How dark the teammate's hand is drawn (0 = no shadow, 1 = darkest).</summary>
     public static float HandShadow = 0.85f;
@@ -324,7 +324,7 @@ public static class Settings
     public static void ResetHandViewer()
     {
         HandViewerEnabled = true;
-        HideHandButtonEnabled = true;
+        HideHandButtonEnabled = false;
         HandShadow = 0.85f;
         HandVisible = 0.20f;
         HandShadowWhenHidden = 0.15f;

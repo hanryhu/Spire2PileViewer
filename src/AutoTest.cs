@@ -867,7 +867,14 @@ public static class AutoTest
             && c.Cost != c.Model.EnergyCost.GetWithModifiers(CostModifiers.All).ToString()).Select(c => $"{c.Model.Id.Entry}={c.Cost}").ToList();
         Check("costs drawn from their state", wrongCost.Count == 0, string.Join(", ", wrongCost));
 
-        // ---- Hide hand ----
+        // ---- Hide hand: H works without the button, which is off by default ----
+        Check("no Hide hand button by default", HandViewer.HideButton is not { Visible: true }, HandViewer.DescribeLeftovers());
+        await PressKey(Key.H);
+        bool hidden = HandViewer.HideOwnHand;
+        await PressKey(Key.H);
+        Check("H works with the button hidden", hidden && !HandViewer.HideOwnHand);
+        Settings.HideHandButtonEnabled = true;
+        await Wait(0.1);
         if (IsFool(Me))
         {
             // Game v0.113's Fool keeps a bow and arrows above the energy counter, where the button sits by default.
@@ -882,11 +889,7 @@ public static class AutoTest
         HandViewer.HideButton?.EmitSignal(BaseButton.SignalName.Pressed);
         Settings.HideHandButtonEnabled = false;
         await Wait(0.1);
-        await PressKey(Key.H);
-        bool hidden = HandViewer.HideOwnHand;
-        await PressKey(Key.H);
-        Check("H works with the button hidden", hidden && !HandViewer.HideOwnHand);
-        Settings.HideHandButtonEnabled = true;
+        Check("turning the setting off removes the button", HandViewer.HideButton is not { Visible: true }, HandViewer.DescribeLeftovers());
         Settings.ShowSelf = true;
         await Wait(0.2);
         PileViewer.SimulatePress(PileViewer.StripIndexOf(me.NetId), PileType.Hand);
@@ -1329,6 +1332,7 @@ public static class AutoTest
         HandViewer.View(MutatorId);
         if (!HandViewer.HideOwnHand) HandViewer.ToggleHideOwnHand();
         Settings.Enabled = false;
+        Settings.HideHandButtonEnabled = true;
         await Wait(0.3);
         Check("strips off: the Hide hand button and teammate hand stay in the fight", HandViewer.HideButton is { Visible: true } && HandViewer.ShownHandCount > 0,
             HandViewer.DescribeLeftovers());
@@ -1337,6 +1341,7 @@ public static class AutoTest
         await Wait(1.5);
         Check("after the fight (rewards): no Hide hand button, teammate hand or hidden hand left", !HandViewer.HasLeftovers, HandViewer.DescribeLeftovers());
         Settings.Enabled = true;
+        Settings.HideHandButtonEnabled = false;
         HandViewer.View(null);
         Send(me, "fight " + PickEncounter().Id.Entry, inCombat: false);
         await WaitUntil(() => CombatManager.Instance.IsInProgress, 30);
